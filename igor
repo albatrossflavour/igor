@@ -290,9 +290,10 @@ cmd_setup() {
 	banner
 	info "Starting Igor setup wizard..."
 	echo ""
+	require_cmd ruby
 	check_bolt
 	ensure_modules
-	bolt plan run igor::setup "$@"
+	exec ruby "${SCRIPT_DIR}/scripts/igor-setup.rb" "$@"
 }
 
 cmd_destroy() {

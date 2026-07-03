@@ -147,7 +147,7 @@ plan igor::reset (
   out::message('')
   out::message('Igor has been reset to a clean state.')
   out::message('To reconfigure, run:')
-  out::message('  bolt plan run igor::setup')
+  out::message('  ./igor setup')
   out::message('')
 
   return({
