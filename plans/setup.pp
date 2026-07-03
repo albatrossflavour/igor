@@ -104,6 +104,14 @@ plan igor::setup (
   $api_url = prompt('Proxmox API URL (e.g., https://192.168.5.10:8006/api2/json)')
   $proxmox_token_id = prompt('Proxmox API token ID (e.g., terraform@pve!terraform)')
   $proxmox_token_secret = prompt('Proxmox API token secret', 'sensitive' => true)
+
+  # Stage 0 (template building) reaches the PVE host over SSH, which is separate
+  # from the API token Terraform uses. Derive the host from the API URL and
+  # confirm the SSH user - this is the hypervisor itself, not the VM ciuser.
+  $proxmox_ssh_host_default = regsubst($api_url, '^https?://([^:/]+).*$', '\1')
+  $proxmox_ssh_host = prompt('Proxmox SSH host', 'default' => $proxmox_ssh_host_default)
+  $proxmox_ssh_user = prompt('Proxmox SSH user (root on the PVE host)', 'default' => 'root')
+  $proxmox_storage = prompt('Proxmox storage for templates', 'default' => 'ceph')
   out::message('')
 
   # ---------------------------------------------------------------
@@ -204,7 +212,6 @@ plan igor::setup (
   $enable_scm_input = prompt('Enable SCM/Comply? (true/false)', 'default' => 'true')
   $enable_cd4pe_input = prompt('Enable CD4PE? (true/false)', 'default' => 'true')
   $enable_dashboard_input = prompt('Enable Dashboard? (true/false)', 'default' => 'true')
-  $enable_nessus_input = prompt('Enable Nessus? (true/false)', 'default' => 'true')
   out::message('')
 
   # ---------------------------------------------------------------
@@ -382,7 +389,6 @@ plan igor::setup (
     puppet_cd4pe     = ${enable_cd4pe_input}
     puppet_scm       = ${enable_scm_input}
     puppet_dashboard = ${enable_dashboard_input}
-    nessus           = ${enable_nessus_input}
 
     # OS Distribution Controls
     enable_alma        = true
@@ -648,31 +654,18 @@ plan igor::setup (
   }
   out::message('  data/roles/role::pe::dashboard.yaml written')
 
-  # role::pe::nessus.yaml
-  $write_nessus_cmd = @("WRITE_NESSUS")
-    cat > data/roles/role::pe::nessus.yaml << 'ENDYAML'
-    nessus::config:
-      resolvable_hostname: new-nessus.${domain}
-    nessus::csr_attributes:
-      datacenter: lab
-      role: role::pe::nessus
-    # PE token generated after PE is built: bolt plan run igor::generate_nessus_pe_token
-    ENDYAML
-    | WRITE_NESSUS
-
-  $write_nessus_result = run_command(
-    $write_nessus_cmd,
-    'localhost',
-    '_run_as' => system::env('USER'),
-    '_catch_errors' => true
-  )
-  out::message('  data/roles/role::pe::nessus.yaml written')
-
   # common.yaml
   $write_common_cmd = @(WRITE_COMMON)
     cat > data/common.yaml << 'ENDYAML'
     # Common configuration for all nodes
     # Role-specific configuration is in data/roles/
+
+    # Proxmox host for stage 0 template building (SSH, not the API token)
+    igor::proxmox_host:
+      host: ${proxmox_ssh_host}
+      user: ${proxmox_ssh_user}
+      storage: ${proxmox_storage}
+      work_dir: /root/templates
     ENDYAML
     | WRITE_COMMON
 
@@ -734,13 +727,6 @@ plan igor::setup (
           parameters:
             provider: ${provider}
             tag_filter: dashboard
-      - name: nessus-nodes
-        targets:
-          _plugin: task
-          task: igor::tofu_inventory
-          parameters:
-            provider: ${provider}
-            tag_filter: nessus
       - name: puppet-agents
         targets:
           _plugin: task

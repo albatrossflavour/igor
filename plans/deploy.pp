@@ -1,8 +1,12 @@
 # @summary Orchestrate full environment build
 # @param apply_terraform Whether to run tofu apply first (default: true)
+# @param build_templates Whether to build Proxmox templates first (default: true)
+# @param force_rebuild Rebuild templates that already exist (default: false)
 # @param provider Infrastructure provider (default: proxmox)
 plan igor::deploy (
   Boolean $apply_terraform = true,
+  Boolean $build_templates = true,
+  Boolean $force_rebuild = false,
   String $provider = 'proxmox'
 ) {
 
@@ -12,6 +16,16 @@ plan igor::deploy (
   # Step 0: Preflight checks
   out::message("Step 0: Running preflight checks...")
   run_plan('igor::preflight', 'provider' => $provider)
+  out::message("")
+
+  # Step 0.5: Build Proxmox templates (skips existing unless force_rebuild)
+  if $build_templates {
+    out::message("Step 0.5: Building Proxmox templates...")
+    run_plan('igor::build_templates', 'force_rebuild' => $force_rebuild)
+    out::message("✓ Proxmox templates ready")
+  } else {
+    out::message("Step 0.5: Skipping template build (build_templates=false)")
+  }
   out::message("")
 
   # Step 1: Apply OpenTofu to provision infrastructure
@@ -47,34 +61,6 @@ plan igor::deploy (
   out::message("✓ Puppet client tools configured")
   out::message("")
 
-  # Step 2.5: Generate Nessus PE token (if Nessus will be deployed)
-  $nessus_check = run_task('igor::tofu_inventory', 'localhost',
-    'provider' => $provider,
-    'tag_filter' => 'nessus'
-  )
-  $nessus_check_data = $nessus_check.first.value['value']
-
-  if !$nessus_check_data.empty {
-    out::message("Step 2.5: Generating Nessus PE token...")
-    run_plan('igor::generate_nessus_pe_token', 'regenerate' => true, 'commit_changes' => true)
-    out::message("✓ Nessus PE token generated and committed")
-
-    out::message("  Deploying production code to PE...")
-    $code_deploy = run_command(
-      'puppet-code deploy production --wait',
-      'localhost',
-      '_run_as' => system::env('USER'),
-      '_catch_errors' => true
-    )
-
-    unless $code_deploy.ok {
-      fail_plan("Failed to deploy production code: ${code_deploy.first.error}")
-    }
-
-    out::message("✓ Production code deployed")
-    out::message("")
-  }
-
   # Step 3: Build additional infrastructure servers
   out::message("Step 3: Building additional infrastructure servers...")
 
@@ -91,30 +77,24 @@ plan igor::deploy (
     'provider' => $provider,
     'tag_filter' => 'dashboard'
   )
-  $nessus_inventory = run_task('igor::tofu_inventory', 'localhost',
-    'provider' => $provider,
-    'tag_filter' => 'nessus'
-  )
 
   $scm_data = $scm_inventory.first.value['value']
   $cd4pe_data = $cd4pe_inventory.first.value['value']
   $dashboard_data = $dashboard_inventory.first.value['value']
-  $nessus_data = $nessus_inventory.first.value['value']
 
   # Create Target objects from fresh inventory
   $scm_targets = $scm_data.map |$t| { Target.new($t['name'], $t['uri']) }
   $cd4pe_targets = $cd4pe_data.map |$t| { Target.new($t['name'], $t['uri']) }
   $dashboard_targets = $dashboard_data.map |$t| { Target.new($t['name'], $t['uri']) }
-  $nessus_targets = $nessus_data.map |$t| { Target.new($t['name'], $t['uri']) }
 
-  if $scm_targets.empty and $cd4pe_targets.empty and $dashboard_targets.empty and $nessus_targets.empty {
+  if $scm_targets.empty and $cd4pe_targets.empty and $dashboard_targets.empty {
     out::message("⚠ No additional infrastructure servers found in tofu state, skipping")
   } else {
     # Build all in parallel using background jobs
     $scm_job = background() || {
       if !$scm_targets.empty {
         out::message("  Building SCM server...")
-        run_plan('igor::build_scm')
+        run_plan('igor::build_infra_node', 'role' => 'scm')
         out::message("  ✓ SCM build complete")
       }
     }
@@ -122,7 +102,7 @@ plan igor::deploy (
     $cd4pe_job = background() || {
       if !$cd4pe_targets.empty {
         out::message("  Building CD4PE server...")
-        run_plan('igor::build_cd4pe')
+        run_plan('igor::build_infra_node', 'role' => 'cd4pe')
         out::message("  ✓ CD4PE build complete")
       }
     }
@@ -130,21 +110,13 @@ plan igor::deploy (
     $dashboard_job = background() || {
       if !$dashboard_targets.empty {
         out::message("  Building Dashboard server...")
-        run_plan('igor::build_dashboard')
+        run_plan('igor::build_infra_node', 'role' => 'dashboard')
         out::message("  ✓ Dashboard build complete")
       }
     }
 
-    $nessus_job = background() || {
-      if !$nessus_targets.empty {
-        out::message("  Building Nessus server...")
-        run_plan('igor::build_nessus')
-        out::message("  ✓ Nessus build complete")
-      }
-    }
-
     # Wait for all to complete
-    wait([$scm_job, $cd4pe_job, $dashboard_job, $nessus_job])
+    wait([$scm_job, $cd4pe_job, $dashboard_job])
     out::message("✓ Additional infrastructure servers build complete")
   }
 
@@ -177,7 +149,7 @@ plan igor::deploy (
   out::message("  ✓ Infrastructure provisioned")
   out::message("  ✓ Puppet Enterprise installed and configured")
   out::message("  ✓ Puppet client tools configured (CA cert imported, console access enabled)")
-  if !$scm_targets.empty or !$cd4pe_targets.empty or !$dashboard_targets.empty or !$nessus_targets.empty {
+  if !$scm_targets.empty or !$cd4pe_targets.empty or !$dashboard_targets.empty {
     out::message("  ✓ Additional infrastructure servers configured")
   }
   if !$agent_targets.empty {
@@ -189,7 +161,6 @@ plan igor::deploy (
     scm_count => $scm_targets.length,
     cd4pe_count => $cd4pe_targets.length,
     dashboard_count => $dashboard_targets.length,
-    nessus_count => $nessus_targets.length,
     agent_count => $agent_targets.length
   })
 }

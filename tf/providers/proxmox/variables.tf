@@ -85,11 +85,6 @@ variable "puppet_dashboard" {
   type        = bool
 }
 
-variable "nessus" {
-  description = "install and manage nessus vulnerability scanner"
-  type        = bool
-}
-
 variable "api_url" {
   description = "proxmox api endpoint"
   type        = string

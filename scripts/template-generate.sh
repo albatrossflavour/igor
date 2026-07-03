@@ -41,7 +41,8 @@ check_prerequisites() {
 BASEDIR=/root/templates
 TEMPLATES='./templates.csv'
 ISODIR='/mnt/pve/luggage/template/iso'
-STORAGE=${STORAGE:-ceph} # Allow override with: STORAGE=local-lvm ./template-generate.sh
+STORAGE=${STORAGE:-ceph}              # Allow override with: STORAGE=local-lvm ./template-generate.sh
+FORCE_REBUILD=${FORCE_REBUILD:-false} # Set FORCE_REBUILD=true to rebuild templates that already exist
 PW=$(cat ./config)
 
 # ID Calculation Functions - KFVEE format
@@ -227,6 +228,16 @@ process_template() {
 	BASE_ID=$(calculate_base_id "$NAME" "$VER")
 	TPROD=$((BASE_ID * 10))
 
+	# Skip templates that already exist unless a rebuild is explicitly forced.
+	# This runs before the ISO download and virt-customize, so a warm host only
+	# pays for templates that are actually missing. Set FORCE_REBUILD=true to
+	# refresh a template that already exists (for example after an upstream image
+	# update).
+	if [ "${FORCE_REBUILD}" != "true" ] && qm status "${TPROD}" >/dev/null 2>&1; then
+		echo "  ✓ Template ${TPROD} (template-${NAME}-${VER}) already exists - skipping"
+		return
+	fi
+
 	# CSV parsing (Name,Version,URL,ISO)
 	CSV_URL=$(echo "$LINE" | awk -F, '{print $3}')
 	CSV_ISO=$(echo "$LINE" | awk -F, '{print $4}')
@@ -283,9 +294,11 @@ process_template() {
 	# Execute single batched virt-customize command (suppress output)
 	eval "$VIRT_CMD" >/dev/null 2>&1
 
-	# Only destroy template if it exists
+	# Destroy the existing template before rebuilding. We only reach this point
+	# when the template did not exist, or when FORCE_REBUILD=true, so this is the
+	# forced-refresh path (the early skip above handles the default warm case).
 	if qm status ${TPROD} >/dev/null 2>&1; then
-		echo "  → Destroying existing template ${TPROD}..."
+		echo "  → Destroying existing template ${TPROD} (force rebuild)..."
 		qm destroy ${TPROD} --destroy-unreferenced-disks 1 >/dev/null 2>&1 || {
 			echo "  ✗ Could not destroy template ${TPROD}, it may be in use"
 			return
@@ -361,7 +374,7 @@ process_template() {
 		echo "  ✗ Error setting password"
 		return
 	}
-	qm set $TPROD --sshkeys ~/.ssh/id_ed25519.pub >/dev/null 2>&1 || {
+	qm set $TPROD --sshkeys ~/.ssh/igor.pub >/dev/null 2>&1 || {
 		echo "  ✗ Error setting ssh keys"
 		return
 	}

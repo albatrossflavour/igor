@@ -25,12 +25,6 @@ output "bolt_inventory" {
       uri  = regexall("ip=([^/]+)", proxmox_vm_qemu.dashboard-server[0].ipconfig0)[0][0]
       tags = proxmox_vm_qemu.dashboard-server[0].tags
     }] : [],
-    # Nessus
-    var.nessus ? [{
-      name = proxmox_vm_qemu.nessus-server[0].name
-      uri  = regexall("ip=([^/]+)", proxmox_vm_qemu.nessus-server[0].ipconfig0)[0][0]
-      tags = proxmox_vm_qemu.nessus-server[0].tags
-    }] : [],
     # Client agents
     [for key, client in proxmox_vm_qemu.puppet_clients : {
       name = client.name

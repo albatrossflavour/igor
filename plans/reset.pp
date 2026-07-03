@@ -17,7 +17,6 @@ plan igor::reset (
     'data/roles/role::pe::scm.yaml',
     'data/roles/role::pe::cd4pe.yaml',
     'data/roles/role::pe::dashboard.yaml',
-    'data/roles/role::pe::nessus.yaml',
     'data/common.yaml',
     'inventory.yaml',
   ]

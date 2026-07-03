@@ -136,6 +136,8 @@ cmd_help() {
 	echo ""
 	echo "  deploy     Deploy the full Puppet Enterprise environment"
 	echo "             Options: apply_terraform=false  (skip VM provisioning)"
+	echo "                      build_templates=false  (skip Proxmox template build)"
+	echo "                      force_rebuild=true     (rebuild existing templates)"
 	echo ""
 	echo "  destroy    Tear down the entire environment"
 	echo "             Options: confirm=true  (required to actually destroy)"

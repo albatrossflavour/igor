@@ -33,5 +33,4 @@ mod 'puppetlabs/puppet_operational_dashboards', '2.4.0'
 
 # Security and compliance
 mod 'puppetlabs/sce_linux', '2.5.0'
-mod 'puppetlabs/nessus_transformer', '1.0.2'
 mod 'puppetlabs/node_encrypt', '3.1.0'

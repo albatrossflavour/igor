@@ -17,7 +17,6 @@ This project provides a complete infrastructure-as-code solution for deploying:
 - **SCM/Comply** server for compliance management
 - **CD4PE** server for continuous delivery
 - **Dashboard** server for visualization
-- **Nessus** vulnerability scanner
 - **Puppet agent clients** across multiple OS distributions
 - **Dynamic inventory** from Terraform state
 - **Automatic DNS** registration via Pihole
@@ -113,7 +112,6 @@ puppet_pe        = true   # Deploy Puppet Enterprise
 puppet_scm       = true   # Deploy SCM/Comply
 puppet_cd4pe     = true   # Deploy CD4PE
 puppet_dashboard = true   # Deploy Dashboard
-nessus           = true   # Deploy Nessus
 
 # OS Distribution Controls
 enable_alma        = false
@@ -251,8 +249,8 @@ This orchestrates the complete deployment:
 
 1. Provisions infrastructure with OpenTofu (VMs + DNS)
 2. Builds Puppet Enterprise server
-3. Builds additional infrastructure (SCM, CD4PE, Dashboard,
-   Nessus) in parallel
+3. Builds additional infrastructure (SCM, CD4PE, Dashboard)
+   in parallel
 4. Builds agent nodes if any exist
 
 **Expected time:** 30-45 minutes
@@ -302,7 +300,6 @@ These can run in parallel:
 bolt plan run igor::build_scm
 bolt plan run igor::build_cd4pe
 bolt plan run igor::build_dashboard
-bolt plan run igor::build_nessus
 ```
 
 **Expected time:** 15-20 minutes each
@@ -366,7 +363,6 @@ open https://new-puppet.yourdomain.com
 | `puppet_scm`           | No       | false                  | Deploy SCM/Comply        |
 | `puppet_cd4pe`         | No       | false                  | Deploy CD4PE             |
 | `puppet_dashboard`     | No       | false                  | Deploy Dashboard         |
-| `nessus`               | No       | false                  | Deploy Nessus            |
 | `enable_alma`          | No       | false                  | Enable Alma Linux        |
 | `enable_centos`        | No       | false                  | Enable CentOS            |
 | `enable_debian`        | No       | false                  | Enable Debian            |
@@ -427,7 +423,6 @@ See module documentation for additional configuration options:
 | SCM        | 998        | 8 (2x4)  | 8GB   | 50GB  | Ubuntu 22.04 |
 | CD4PE      | 997        | 8 (2x4)  | 8GB   | 50GB  | Ubuntu 24.04 |
 | Dashboard  | 996        | 4 (2x2)  | 4GB   | 50GB  | Ubuntu 22.04 |
-| Nessus     | 995        | 4 (2x2)  | 4GB   | 50GB  | Ubuntu 22.04 |
 | Agents     | 1xxx-9xxxx | 2 (1x2)  | 1.5GB | 37GB  | Varies       |
 
 Agent VMs are created dynamically based on enabled OS
@@ -444,7 +439,6 @@ Infrastructure uses tags for dynamic inventory grouping:
 | `scm`          | SCM servers        | Compliance        |
 | `cd4pe`        | CD4PE servers      | Pipeline mgmt     |
 | `dashboard`    | Dashboard servers  | Visualization     |
-| `nessus`       | Nessus scanners    | Security scan     |
 | `puppetagents` | Agent nodes        | Agent deploy      |
 
 Add new tags by editing `tags` in Terraform resources, then

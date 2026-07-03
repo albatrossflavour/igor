@@ -30,8 +30,6 @@ plan igor::status() {
       'CD4PE'
     } elsif $tags =~ /;dashboard(;|$)|(^|;)dashboard;/ {
       'Dashboard'
-    } elsif $tags =~ /;nessus(;|$)|(^|;)nessus;/ {
-      'Nessus'
     } elsif $tags =~ /;puppet(;|$)|(^|;)puppet;/ and $tags !~ /puppetagents/ {
       'Puppet Enterprise'
     } else {
@@ -78,13 +76,6 @@ plan igor::status() {
       } elsif $component == 'Dashboard' {
         $grafana_status = run_command('systemctl is-active grafana-server', $target, '_catch_errors' => true)
         if $grafana_status.ok and $grafana_status.first.value['stdout'] =~ /active/ {
-          'running'
-        } else {
-          'service down'
-        }
-      } elsif $component == 'Nessus' {
-        $nessus_status = run_command('systemctl is-active nessusd', $target, '_catch_errors' => true)
-        if $nessus_status.ok and $nessus_status.first.value['stdout'] =~ /active/ {
           'running'
         } else {
           'service down'

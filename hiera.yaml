@@ -12,6 +12,5 @@ hierarchy:
       - "roles/role::pe::primary.yaml"
       - "roles/role::pe::scm.yaml"
       - "roles/role::pe::cd4pe.yaml"
-      - "roles/role::pe::nessus.yaml"
       - "roles/role::pe::dashboard.yaml"
       - "common.yaml"
