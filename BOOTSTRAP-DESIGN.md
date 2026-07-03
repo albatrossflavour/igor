@@ -29,9 +29,9 @@ Every plan sorts into one of two piles by a single test: does it call an externa
 
 ### Bolt earns its place (node-facing, uses inventory and the peadm-family modules)
 
-- `build_pe` (stage 2): `peadm::install`, `code_manager`, `mkdir_p_file`, `puppet_runonce`
-- `build_scm` / `build_cd4pe` / `build_dashboard` (stage 5): `agent_install`, CSR inserts, `install_from_config`, `puppet_runonce`
-- `build_agents` (stage 7): `agent_install`, `puppet_runonce`
+- `build_pe` (stage 4): `peadm::install`, `code_manager`, `mkdir_p_file`, `puppet_runonce`
+- `build_scm` / `build_cd4pe` / `build_dashboard` (stage 6): `agent_install`, CSR inserts, `install_from_config`, `puppet_runonce`
+- `build_agents` (stage 8): `agent_install`, `puppet_runonce`
 - `status` (node half): `complyadm::ctl`, `cd4peadm::ctl`
 
 ### Bolt is ceremony (localhost subprocess launching, no module or inventory benefit)
@@ -60,23 +60,23 @@ For each charter stage: the proven substrate it calls, whether it belongs in Bol
 
 | Stage                           | Substrate it calls                                       | Bolt or driver  | Notes                                                                                                                |
 | ------------------------------- | -------------------------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------- |
-| 0 Templates                     | `template-generate.sh` on the PVE host                   | Driver          | Run the script on the host. The Bolt SSH-staging wrapper is ceremony. Keep the skip/force_rebuild logic.             |
-| 1 Provision                     | `tf/` (kept, improved with outputs and DNS)              | Driver          | Run `tofu` directly with `op://` injection restored (proxform's `run-terraform.sh` pattern). Not a Bolt plan.        |
-| 2 PE primary                    | `peadm::install`, `code_manager`, `mkdir_p_file`         | Bolt            | Earns it. Strip out the control-repo bootstrap, CA cert, and access-login glue tangled inside it.                    |
-| 3 Client tools                  | local puppet-access / puppet-code                        | Driver          | `fetch_ca_cert`, `puppet_access_login`, `configure_client_tools` are three localhost scripts. Merge into the driver. |
-| 4 Control repo                  | git, gh                                                  | Driver          | `bootstrap_control_repo` is 448 lines of git/gh. A shell function, not a Bolt plan.                                  |
-| 5 Infra roles                   | `agent_install`, `install_from_config`, `puppet_runonce` | Bolt            | Collapse the near-identical plans into one parameterised flow driven by the hiera role table.                        |
-| 6 Integration tokens (reserved) | PE RBAC API, eyaml                                       | Driver (mostly) | Reserved slot, no consumer since Nessus was removed. Kept for future external-tool integrations.                     |
-| 7 Agents                        | `agent_install`, `puppet_runonce`                        | Bolt            | Earns it. Same parameterised shape as stage 5.                                                                       |
-| 8 Code deploy                   | `peadm::code_manager` or `puppet-code deploy`            | Driver          | One command.                                                                                                         |
+| 1 Templates                     | `template-generate.sh` on the PVE host                   | Driver          | Run the script on the host. The Bolt SSH-staging wrapper is ceremony. Keep the skip/force_rebuild logic.             |
+| 2 Provision                     | `tf/` (kept, improved with outputs and DNS)              | Driver          | Run `tofu` directly with `op://` injection restored (proxform's `run-terraform.sh` pattern). Not a Bolt plan.        |
+| 3 Control repo                  | git, gh                                                  | Driver          | `bootstrap_control_repo` is 448 lines of git/gh. A shell function, not a Bolt plan.                                  |
+| 4 PE primary                    | `peadm::install`, `code_manager`, `mkdir_p_file`         | Bolt            | Earns it. Strip out the control-repo bootstrap, CA cert, and access-login glue tangled inside it.                    |
+| 5 Client tools                  | local puppet-access / puppet-code                        | Driver          | `fetch_ca_cert`, `puppet_access_login`, `configure_client_tools` are three localhost scripts. Merge into the driver. |
+| 6 Infra roles                   | `agent_install`, `install_from_config`, `puppet_runonce` | Bolt            | Collapse the near-identical plans into one parameterised flow driven by the hiera role table.                        |
+| 7 Integration tokens (reserved) | PE RBAC API, eyaml                                       | Driver (mostly) | Reserved slot, no consumer since Nessus was removed. Kept for future external-tool integrations.                     |
+| 8 Agents                        | `agent_install`, `puppet_runonce`                        | Bolt            | Earns it. Same parameterised shape as stage 6.                                                                       |
+| 9 Code deploy                   | `peadm::code_manager` or `puppet-code deploy`            | Driver          | One command.                                                                                                         |
 
 Lifecycle verbs follow the same rule: `setup` and `preflight` become driver scripts (not an 817-line plan), `status` splits (Bolt for the node query, driver for the tofu part), `reset` and `destroy` are driver-side tofu and rm, with the agent purge staying in Bolt.
 
 ## Shape of the result
 
-The `./igor` script stays as the single entry point, but stops routing everything through `bolt plan run igor::deploy`. Instead it orchestrates the phases and calls the right tool for each: `tofu` directly for provisioning and teardown (with `op://` secrets), the template script on the host, `git`/`gh` for the control repo, local puppet client tools for stage 3, and Bolt only for the node-configuration stages (2, 5, 7) where inventory and the peadm-family modules pull their weight.
+The `./igor` script stays as the single entry point, but stops routing everything through `bolt plan run igor::deploy`. Instead it orchestrates the phases and calls the right tool for each: `tofu` directly for provisioning and teardown (with `op://` secrets), the template script on the host, `git`/`gh` for the control repo, local puppet client tools for stage 5, and Bolt only for the node-configuration stages (4, 6, 8) where inventory and the peadm-family modules pull their weight.
 
-Of roughly nineteen current plans, about five stay as Bolt (cleaned up, with the three stage-5 duplicates collapsed to one). The rest become driver logic.
+Of roughly nineteen current plans, about five stay as Bolt (cleaned up, with the three stage-6 duplicates collapsed to one). The rest become driver logic.
 
 ## Recommendation on topology
 

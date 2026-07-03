@@ -57,11 +57,9 @@ plan igor::build_pe {
     out::message("Warning: No pe_license_content found in hiera")
   }
 
-  run_plan('igor::bootstrap_control_repo',
-    'push' => true
-  )
-
   # Deploy code to production environment
+  # (the control repo is bootstrapped by the driver's stage_control_repo,
+  # which runs before this plan so Code Manager has something to deploy)
   out::message("Deploying code to production environment...")
   run_task('peadm::code_manager', $targets,
     'action' => 'deploy production'
@@ -113,11 +111,8 @@ plan igor::build_pe {
     'action' => 'start'
   )
 
-  # Download CA certificate
-  run_plan('igor::fetch_ca_cert')
-
-  # Generate PE access token
-  run_plan('igor::puppet_access_login')
+  # CA cert download, console login, and client-tool config are handled by the
+  # driver's stage_client_tools, which runs after this plan.
 
   out::message("Puppet Enterprise build completed successfully")
 

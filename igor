@@ -1,21 +1,37 @@
 #!/usr/bin/env bash
 #
-# igor - Bootstrap and manage an Igor Puppet Enterprise demo environment
+# igor - conductor for building a Puppet Enterprise demo environment.
+#
+# ./igor is the driver (see DRIVER-DESIGN.md). It runs the charter's stages in
+# order and calls the tool that fits each: tofu for provisioning, the template
+# script over SSH, git/gh for the control repo, and Bolt only for the
+# node-configuration stages (PE, infra roles, agents). Each stage is also
+# individually invocable for debugging and demos.
 #
 # Usage:
-#   ./igor setup     - Interactive first-time configuration
-#   ./igor deploy    - Deploy the full environment
-#   ./igor destroy   - Tear down the full environment
-#   ./igor reset     - Remove all generated config (back to clean clone)
-#   ./igor preflight - Validate prerequisites
-#   ./igor status    - Show environment status
-#   ./igor help      - Show this help
-#
+#   ./igor deploy       - run all stages in order (accepts gating flags)
+#   ./igor templates    - stage 1: build Proxmox templates
+#   ./igor provision    - stage 2: tofu apply (VMs + DNS)
+#   ./igor control-repo - stage 3: bootstrap the control repo
+#   ./igor pe           - stage 4: build Puppet Enterprise
+#   ./igor client-tools - stage 5: CA cert, console login, client config
+#   ./igor infra        - stage 6: build infrastructure roles
+#   ./igor agents       - stage 8: build agent nodes
+#   ./igor setup        - interactive first-time configuration
+#   ./igor destroy      - tear down the environment
+#   ./igor reset        - remove generated config
+#   ./igor preflight    - validate prerequisites
+#   ./igor status       - show environment status
+#   ./igor help         - show this help
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+PROVIDER="${IGOR_PROVIDER:-proxmox}"
+PROVIDER_DIR="tf/providers/${PROVIDER}"
+SECRETS_ENV="${PROVIDER_DIR}/secrets.env"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -36,10 +52,17 @@ banner() {
 
 info() { echo -e "${GREEN}[info]${NC}  $*"; }
 warn() { echo -e "${YELLOW}[warn]${NC}  $*"; }
-error() { echo -e "${RED}[error]${NC} $*"; }
+error() { echo -e "${RED}[error]${NC} $*" >&2; }
+
+require_cmd() {
+	if ! command -v "$1" >/dev/null 2>&1; then
+		error "Required command not found: $1"
+		return 1
+	fi
+}
 
 check_bolt() {
-	if ! command -v bolt &>/dev/null; then
+	if ! command -v bolt >/dev/null 2>&1; then
 		error "Bolt is not installed."
 		echo "  Install: https://www.puppet.com/docs/bolt/latest/bolt_installing"
 		exit 1
@@ -50,43 +73,234 @@ ensure_modules() {
 	if [ ! -d ".modules" ]; then
 		info "Installing Bolt modules (first run)..."
 		bolt module install
-		echo ""
 	fi
+}
+
+# Read a value from terraform.tfvars (non-secret config; secrets come from 1Password).
+tfvar() {
+	awk -F'"' -v k="$1" '$0 ~ "^[[:space:]]*"k"[[:space:]]*=" {print $2; exit}' \
+		"${PROVIDER_DIR}/terraform.tfvars" 2>/dev/null
+}
+
+# Run tofu in the provider dir with secrets injected from 1Password.
+tofu_run() {
+	require_cmd op
+	require_cmd tofu
+	op run --env-file="$SECRETS_ENV" -- \
+		sh -c "cd '${PROVIDER_DIR}' && tofu $*"
+}
+
+# True if the given tofu tag has at least one VM in state.
+role_has_targets() {
+	local tag="$1" out count
+	out="$(PT_provider="$PROVIDER" PT_tag_filter="$tag" ./tasks/tofu_inventory.sh 2>/dev/null || echo '{"value":[]}')"
+	count="$(printf '%s' "$out" | jq '.value | length' 2>/dev/null || echo 0)"
+	[ "${count:-0}" -gt 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# Stages
+# ---------------------------------------------------------------------------
+
+# Stage 1: build Proxmox templates on the hypervisor host.
+# Conditional: skips existing templates unless force_rebuild, so a warm host
+# pays almost nothing. Also runnable on its own via `./igor templates`.
+stage_templates() {
+	local force="${1:-false}"
+	info "Stage 1: Proxmox templates"
+	require_cmd op
+	require_cmd ssh
+	require_cmd scp
+
+	local host user storage workdir cipassword
+	host="${PVE_HOST:-$(tfvar api_url | sed -E 's#^https?://([^:/]+).*#\1#')}"
+	user="${PVE_USER:-root}"
+	storage="${STORAGE:-ceph}"
+	workdir="${PVE_WORKDIR:-/root/templates}"
+
+	if [ -z "$host" ]; then
+		error "No Proxmox host. Set PVE_HOST, or ensure api_url is in terraform.tfvars."
+		return 1
+	fi
+
+	cipassword="$(op read "${CIPASSWORD_OP:-op://proxtoboltfu/proxmox-credentials/cipassword}")"
+
+	info "  host=${host} user=${user} storage=${storage} force_rebuild=${force}"
+	# The remote command strings intentionally expand workdir/force/storage on
+	# the client before being sent to the host (SC2029 is expected here).
+	# shellcheck disable=SC2029
+	ssh -o StrictHostKeyChecking=no "${user}@${host}" "mkdir -p '${workdir}'"
+	scp -q scripts/template-generate.sh scripts/template-clean.sh config/templates.csv \
+		"${user}@${host}:${workdir}/"
+	# Write the password file the script reads via `cat ./config`, via stdin so
+	# it never lands on the process list.
+	# shellcheck disable=SC2029
+	printf '%s' "$cipassword" | ssh "${user}@${host}" "umask 077 && cat > '${workdir}/config'"
+	# shellcheck disable=SC2029
+	ssh "${user}@${host}" "cd '${workdir}' && FORCE_REBUILD='${force}' STORAGE='${storage}' sh ./template-generate.sh"
+	# shellcheck disable=SC2029
+	ssh "${user}@${host}" "rm -f '${workdir}/config'"
+	info "  templates ready"
+}
+
+# Stage 2: provision VMs and DNS with tofu (secrets from 1Password).
+stage_provision() {
+	info "Stage 2: Provision infrastructure (tofu apply)"
+	tofu_run "apply -auto-approve -parallelism=1"
+	info "  waiting 30s for DNS propagation..."
+	sleep 30
+	info "  infrastructure provisioned"
+}
+
+# Stage 3: bootstrap the control repo on GitHub (git/gh).
+# Runs before stage_pe so Code Manager has a repo to deploy from during the PE
+# build. Still invokes the Bolt plan for now; a bash reimplementation follows the
+# secrets migration (the plan reads r10k_remote and config from hiera today).
+stage_control_repo() {
+	info "Stage 3: Control repo"
+	check_bolt
+	ensure_modules
+	bolt plan run igor::bootstrap_control_repo push=true
+	info "  control repo bootstrapped"
+}
+
+# Stage 4: build the PE primary (pure node config).
+stage_pe() {
+	info "Stage 4: Puppet Enterprise"
+	check_bolt
+	ensure_modules
+	bolt plan run igor::build_pe
+	info "  PE primary ready"
+}
+
+# Stage 5: local Puppet client tools (CA cert, console login, tool config).
+# Runs after stage_pe (needs PE up). Still invokes the Bolt plans, which read
+# config and the console password from eyaml hiera; a bash reimplementation
+# follows the secrets migration that moves those into 1Password.
+stage_client_tools() {
+	info "Stage 5: Client tools"
+	check_bolt
+	ensure_modules
+	bolt plan run igor::fetch_ca_cert
+	bolt plan run igor::puppet_access_login
+	bolt plan run igor::configure_client_tools
+	info "  client tools configured"
+}
+
+# Stage 6: build each infrastructure role that has VMs in state.
+stage_infra() {
+	info "Stage 6: Infrastructure roles"
+	check_bolt
+	ensure_modules
+	local role built=false
+	for role in scm cd4pe dashboard; do
+		if role_has_targets "$role"; then
+			info "  building ${role}..."
+			bolt plan run igor::build_infra_node role="$role"
+			built=true
+		fi
+	done
+	if [ "$built" = false ]; then
+		info "  no infrastructure roles in tofu state, skipping"
+	fi
+}
+
+# Stage 8: build agent nodes if any exist.
+stage_agents() {
+	info "Stage 8: Agent nodes"
+	if role_has_targets puppetagents; then
+		check_bolt
+		ensure_modules
+		bolt plan run igor::build_agents
+		info "  agents built"
+	else
+		info "  no agents in tofu state, skipping"
+	fi
+}
+
+# Stage 9: deploy control repo code.
+stage_code_deploy() {
+	info "Stage 9: Deploy control repo code"
+	if command -v puppet-code >/dev/null 2>&1; then
+		puppet-code deploy production --wait
+		info "  production code deployed"
+	else
+		warn "  puppet-code not found, skipping (build_pe already deploys via code_manager)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+cmd_deploy() {
+	local build_templates=true apply_terraform=true force_rebuild=false arg
+	for arg in "$@"; do
+		case "$arg" in
+		build_templates=*) build_templates="${arg#*=}" ;;
+		apply_terraform=*) apply_terraform="${arg#*=}" ;;
+		force_rebuild=*) force_rebuild="${arg#*=}" ;;
+		*)
+			error "Unknown deploy option: ${arg}"
+			exit 1
+			;;
+		esac
+	done
+
+	banner
+	info "Deploying Igor environment"
+	echo ""
+
+	check_bolt
+	ensure_modules
+	bolt plan run igor::preflight
+	echo ""
+
+	if [ "$build_templates" = true ]; then
+		stage_templates "$force_rebuild"
+	else
+		info "Stage 1: skipping template build (build_templates=false)"
+	fi
+	echo ""
+
+	if [ "$apply_terraform" = true ]; then
+		stage_provision
+	else
+		info "Stage 2: skipping provisioning (apply_terraform=false)"
+	fi
+	echo ""
+
+	stage_control_repo
+	echo ""
+	stage_pe
+	echo ""
+	stage_client_tools
+	echo ""
+	stage_infra
+	echo ""
+	stage_agents
+	echo ""
+	stage_code_deploy
+
+	echo ""
+	info "=== Environment build complete ==="
 }
 
 cmd_setup() {
 	banner
 	info "Starting Igor setup wizard..."
 	echo ""
-
 	check_bolt
-
-	# For setup, we need modules installed first so the plan can run.
-	# But we do a lightweight install - setup.pp will re-run it anyway.
 	ensure_modules
-
 	bolt plan run igor::setup "$@"
-}
-
-cmd_deploy() {
-	banner
-	info "Deploying Igor environment..."
-	echo ""
-
-	check_bolt
-	ensure_modules
-
-	bolt plan run igor::deploy "$@"
 }
 
 cmd_destroy() {
 	banner
 	warn "Destroying Igor environment..."
 	echo ""
-
 	check_bolt
 	ensure_modules
-
 	bolt plan run igor::destroy_environment "$@"
 }
 
@@ -94,13 +308,8 @@ cmd_reset() {
 	banner
 	warn "Resetting Igor configuration..."
 	echo ""
-
 	check_bolt
-
-	# Reset doesn't need modules - it just deletes files.
-	# But Bolt needs to parse the plan, which requires module resolution.
 	ensure_modules
-
 	bolt plan run igor::reset "$@"
 }
 
@@ -108,10 +317,8 @@ cmd_preflight() {
 	banner
 	info "Running preflight checks..."
 	echo ""
-
 	check_bolt
 	ensure_modules
-
 	bolt plan run igor::preflight "$@"
 }
 
@@ -119,10 +326,8 @@ cmd_status() {
 	banner
 	info "Checking environment status..."
 	echo ""
-
 	check_bolt
 	ensure_modules
-
 	bolt plan run igor::status "$@"
 }
 
@@ -130,48 +335,79 @@ cmd_help() {
 	banner
 	echo "Usage: ./igor <command> [options]"
 	echo ""
-	echo "Commands:"
-	echo "  setup      Interactive first-time configuration"
-	echo "             Options: reconfigure=true  (overwrite existing config)"
-	echo ""
-	echo "  deploy     Deploy the full Puppet Enterprise environment"
-	echo "             Options: apply_terraform=false  (skip VM provisioning)"
-	echo "                      build_templates=false  (skip Proxmox template build)"
+	echo "Full build:"
+	echo "  deploy     Run the deploy stages in order"
+	echo "             Options: build_templates=false  (skip Proxmox template build)"
+	echo "                      apply_terraform=false  (skip VM provisioning)"
 	echo "                      force_rebuild=true     (rebuild existing templates)"
 	echo ""
-	echo "  destroy    Tear down the entire environment"
-	echo "             Options: confirm=true  (required to actually destroy)"
+	echo "Deploy stages (individually invocable for debugging and demos):"
+	echo "  templates     Stage 1: build Proxmox templates on the host"
+	echo "  provision     Stage 2: tofu apply (VMs + DNS)"
+	echo "  control-repo  Stage 3: bootstrap the control repo on GitHub"
+	echo "  pe            Stage 4: build Puppet Enterprise"
+	echo "  client-tools  Stage 5: CA cert, console login, client tool config"
+	echo "  infra         Stage 6: build infrastructure roles (scm, cd4pe, dashboard)"
+	echo "  agents        Stage 8: build agent nodes"
 	echo ""
-	echo "  reset      Remove all generated config files"
-	echo "             Options: confirm=true  (required to actually delete)"
-	echo ""
-	echo "  preflight  Validate all prerequisites before deployment"
-	echo ""
-	echo "  status     Show current environment status"
-	echo ""
-	echo "  help       Show this help message"
+	echo "Lifecycle:"
+	echo "  setup      Interactive first-time configuration"
+	echo "  preflight  Validate prerequisites"
+	echo "  status     Show environment status"
+	echo "  destroy    Tear down the environment  (confirm=true to proceed)"
+	echo "  reset      Remove generated config     (confirm=true to proceed)"
+	echo "  help       Show this help"
 	echo ""
 	echo "Typical workflow:"
-	echo "  1. ./igor setup          # Configure everything"
-	echo "  2. ./igor preflight      # Verify prerequisites"
-	echo "  3. ./igor deploy         # Build the environment"
-	echo ""
-	echo "To start over:"
-	echo "  ./igor destroy confirm=true   # Tear down VMs"
-	echo "  ./igor reset confirm=true     # Remove config files"
-	echo "  ./igor setup                  # Reconfigure"
+	echo "  1. ./igor setup"
+	echo "  2. ./igor preflight"
+	echo "  3. ./igor deploy"
 	echo ""
 }
 
 # Main dispatch
 case "${1:-help}" in
-setup)
-	shift
-	cmd_setup "$@"
-	;;
 deploy)
 	shift
 	cmd_deploy "$@"
+	;;
+templates)
+	shift
+	_force=false
+	for _a in "$@"; do
+		case "$_a" in
+		force_rebuild=*) _force="${_a#*=}" ;;
+		esac
+	done
+	stage_templates "$_force"
+	;;
+provision)
+	shift
+	stage_provision
+	;;
+control-repo)
+	shift
+	stage_control_repo
+	;;
+pe)
+	shift
+	stage_pe
+	;;
+client-tools)
+	shift
+	stage_client_tools
+	;;
+infra)
+	shift
+	stage_infra
+	;;
+agents)
+	shift
+	stage_agents
+	;;
+setup)
+	shift
+	cmd_setup "$@"
 	;;
 destroy)
 	shift

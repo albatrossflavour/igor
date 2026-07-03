@@ -1,4 +1,4 @@
-# @summary Build and configure one infrastructure node by role (charter stage 5).
+# @summary Build and configure one infrastructure node by role (charter stage 6).
 #
 # Replaces the near-identical build_scm / build_cd4pe / build_dashboard plans
 # with a single parameterised flow driven by a role table.

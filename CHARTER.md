@@ -35,23 +35,23 @@ A run leaves behind:
 
 This is the spine. Every artefact in the repo should map to one of these stages or be removed.
 
-0. Build Proxmox templates (host-side, on the PVE host, conditional). Produces named templates.
-1. Provision VMs and DNS (OpenTofu plus Proxmox plus Pihole). Clones the templates from stage 0.
-2. Build the PE primary (peadm).
-3. Configure local client tools (CA cert, console login).
-4. Bootstrap the control repo on GitHub, seeded from Igor's data.
-5. Build supporting infrastructure in parallel: SCM, CD4PE, Dashboard.
-6. Reserved: external-tool integration tokens (for example PE RBAC tokens). No consumer at present (it previously held the Nessus token); kept as a slot for future integrations.
-7. Build and classify agent nodes.
-8. Deploy control repo code (`puppet-code deploy production`).
+1. Build Proxmox templates (host-side, on the PVE host, conditional). Produces named templates.
+2. Provision VMs and DNS (OpenTofu plus Proxmox plus Pihole). Clones the templates from stage 1.
+3. Bootstrap the control repo on GitHub, seeded from Igor's data. Done before the PE build so Code Manager has code to deploy from.
+4. Build the PE primary (peadm). Code Manager deploys from the control repo created in stage 3.
+5. Configure local client tools (CA cert, console login).
+6. Build supporting infrastructure in parallel: SCM, CD4PE, Dashboard.
+7. Reserved: external-tool integration tokens (for example PE RBAC tokens). No consumer at present (it previously held the Nessus token); kept as a slot for future integrations.
+8. Build and classify agent nodes.
+9. Deploy control repo code (`puppet-code deploy production`).
 
 Alongside the build path sit the lifecycle verbs, which exist for the operator rather than as part of a deploy: `setup`, `preflight`, `status`, `reset`, `destroy`.
 
-## Stage 0: template building
+## Stage 1: template building
 
 Template building is on the critical path, but it is conditional. The scope is "Igor can build templates". The behaviour is "Igor builds the templates that are missing". Those are not the same sentence, and the second one is what keeps `./igor deploy` usable day to day.
 
-There is one canonical builder. Any duplicate or half-finished alternative is a hazard, because a second implementation drifts from the first on VMID numbering and produces templates that stage 1 cannot find.
+There is one canonical builder. Any duplicate or half-finished alternative is a hazard, because a second implementation drifts from the first on VMID numbering and produces templates that stage 2 cannot find.
 
 ### Gating
 
@@ -61,7 +61,7 @@ Per-template existence check (default, idempotent). Before building each templat
 
 Argument gates (overrides), exposed on the plan and through the `./igor` wrapper:
 
-- `build_templates` (default `true`): whether to run stage 0 at all. Set `false` when the host is known to be prepped and you do not want to SSH in and check.
+- `build_templates` (default `true`): whether to run stage 1 at all. Set `false` when the host is known to be prepped and you do not want to SSH in and check.
 - `force_rebuild` (default `false`): destroy and rebuild even when a template already exists. Use it when an upstream cloud image has been refreshed.
 
 Behaviour summary:
@@ -69,18 +69,18 @@ Behaviour summary:
 | Invocation                            | Result                                                |
 | ------------------------------------- | ----------------------------------------------------- |
 | `./igor deploy`                       | build missing templates, skip existing, then continue |
-| `./igor deploy build_templates=false` | skip stage 0 entirely                                 |
+| `./igor deploy build_templates=false` | skip stage 1 entirely                                 |
 | `./igor deploy force_rebuild=true`    | rebuild all templates from fresh images               |
 
 The destroy-and-recreate path only fires under `force_rebuild`. Default runs never tear down a template that already exists.
 
 ### Targeting the hypervisor
 
-Stage 0 runs on the Proxmox host itself, which is not in the OpenTofu inventory because Igor did not create it. It needs a static target: a `proxmox_host` value in Hiera and a matching inventory entry, so a Bolt plan can reach the host over SSH and run the builder. This is a distinct concept from the dynamic, tofu-driven inventory groups used by every later stage.
+Stage 1 runs on the Proxmox host itself, which is not in the OpenTofu inventory because Igor did not create it. It needs a static target: a `proxmox_host` value in Hiera and a matching inventory entry, so a Bolt plan can reach the host over SSH and run the builder. This is a distinct concept from the dynamic, tofu-driven inventory groups used by every later stage.
 
 ### Template naming is a contract
 
-Stage 1 clones templates by name (for example `template-Ubuntu-2404`). Those names, and the VMIDs the builder assigns, are the interface between stage 0 and stage 1. They must agree, the same way `bolt_inventory` is the contract between OpenTofu and the inventory task. A single builder makes this contract trivial to keep; multiple builders break it silently.
+Stage 2 clones templates by name (for example `template-Ubuntu-2404`). Those names, and the VMIDs the builder assigns, are the interface between stage 1 and stage 2. They must agree, the same way `bolt_inventory` is the contract between OpenTofu and the inventory task. A single builder makes this contract trivial to keep; multiple builders break it silently.
 
 ## What Igor does not do
 

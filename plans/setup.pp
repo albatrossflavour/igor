@@ -44,7 +44,7 @@ plan igor::setup (
 
   if $tfvars_exists and $backend_exists and $keys_exist and !$reconfigure {
     out::message('Configuration files already exist. To reconfigure, run:')
-    out::message('  bolt plan run igor::setup reconfigure=true')
+    out::message('  ./igor setup reconfigure=true')
     return({ 'status' => 'already_configured' })
   }
 
@@ -105,7 +105,7 @@ plan igor::setup (
   $proxmox_token_id = prompt('Proxmox API token ID (e.g., terraform@pve!terraform)')
   $proxmox_token_secret = prompt('Proxmox API token secret', 'sensitive' => true)
 
-  # Stage 0 (template building) reaches the PVE host over SSH, which is separate
+  # Stage 1 (template building) reaches the PVE host over SSH, which is separate
   # from the API token Terraform uses. Derive the host from the API URL and
   # confirm the SSH user - this is the hypervisor itself, not the VM ciuser.
   $proxmox_ssh_host_default = regsubst($api_url, '^https?://([^:/]+).*$', '\1')
@@ -660,7 +660,7 @@ plan igor::setup (
     # Common configuration for all nodes
     # Role-specific configuration is in data/roles/
 
-    # Proxmox host for stage 0 template building (SSH, not the API token)
+    # Proxmox host for stage 1 template building (SSH, not the API token)
     igor::proxmox_host:
       host: ${proxmox_ssh_host}
       user: ${proxmox_ssh_user}
@@ -791,7 +791,7 @@ plan igor::setup (
   out::message('')
   out::message('Next steps:')
   out::message('  bolt plan run igor::preflight')
-  out::message('  bolt plan run igor::deploy')
+  out::message('  ./igor deploy')
   out::message('')
 
   return({
