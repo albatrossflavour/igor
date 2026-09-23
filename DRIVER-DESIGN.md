@@ -37,12 +37,12 @@ The driver injects Terraform secrets with an `op run` env-file, so the values on
 
 ```bash
 # tf/providers/proxmox/secrets.env  (op:// references, safe to commit)
-TF_VAR_proxmox_password=op://proxtoboltfu/proxmox-credentials/password
-TF_VAR_pe_console_password=op://proxtoboltfu/pe-credentials/console_password
-TF_VAR_sudo_password=op://proxtoboltfu/pe-credentials/sudo_password
-TF_VAR_forge_token=op://proxtoboltfu/pe-credentials/forge_token
-AWS_ACCESS_KEY_ID=op://proxtoboltfu/aws-s3-backend/access_key_id
-AWS_SECRET_ACCESS_KEY=op://proxtoboltfu/aws-s3-backend/secret_access_key
+TF_VAR_proxmox_password=op://igor/proxmox-credentials/password
+TF_VAR_pe_console_password=op://igor/pe-credentials/console_password
+TF_VAR_sudo_password=op://igor/pe-credentials/sudo_password
+TF_VAR_forge_token=op://igor/pe-credentials/forge_token
+AWS_ACCESS_KEY_ID=op://igor/aws-s3-backend/access_key_id
+AWS_SECRET_ACCESS_KEY=op://igor/aws-s3-backend/secret_access_key
 
 # driver wrapper
 tofu_apply() {
@@ -57,7 +57,7 @@ The env-file holds `op://` references, not secrets, so it can be committed. This
 
 | Stage                | Driver does                                                                                     | Tool            |
 | -------------------- | ----------------------------------------------------------------------------------------------- | --------------- |
-| 1 Templates          | `op read` the cipassword, stage the script to the PVE host, run `template-generate.sh` over SSH | Driver (ssh)    |
+| 1 Templates          | `op read` the cipassword, scp goodmountain to the PVE host, run `template-generate.sh` over SSH | Driver (ssh)    |
 | 2 Provision          | `op run -- tofu apply` with the env-file; wait for DNS                                          | Driver (tofu)   |
 | 3 Control repo       | `gh repo create`, clone template, seed from `data/`, push                                       | Driver (git/gh) |
 | 4 PE primary         | `bolt plan run igor::build_pe`                                                                  | Bolt            |
@@ -92,5 +92,5 @@ Being honest about what the driver replaces, so we do not end up with two implem
 ## Decisions (settled)
 
 1. **Config source: keep the split.** The driver reads `terraform.tfvars` and tofu outputs; the Bolt stages read Hiera as they do now. This accepts the existing duplication of domain and hostnames across the two, in exchange for less work and less risk. Unifying config is a possible later cleanup, not part of this rewrite.
-2. **1Password provisioning: create if missing.** `setup` prompts for each Terraform secret and runs `op item create` in the `proxtoboltfu` vault when the `op://` reference does not resolve, so a fresh demo is turnkey. Existing items are left alone. (The vault is still named `proxtoboltfu` from the pre-rename; renaming it to `igor` is an optional tidy-up that would touch the `op://` paths in `secrets.env` and `load_1password_secrets.rb`.)
+2. **1Password provisioning: create if missing.** `setup` prompts for each Terraform secret and provisions them in the `igor` vault: it runs `op vault create igor` if the vault is missing, then `op item create`/`op item edit` for each item. Fields are passed as assignment arguments with stdin on `/dev/null` (the `op` CLI otherwise tries to read a JSON template from a piped stdin and fails). This makes a fresh demo turnkey.
 3. **Driver language: Ruby.** Initially bash (it matched the existing `./igor` entry point and is fine for sequencing subprocess calls), revised to Ruby. Setup went to Ruby first because it is interactive prompts plus crypto plus templating — bash's weak spot. The driver follows because the work still queued to move into it (stages 3 and 4: reading `console_password` from eyaml hiera, and the 448-line git/gh control-repo bootstrap) is the same Ruby-shaped logic, and even today role discovery shells out to `jq` and config reading to `awk`. Ruby is already a hard dependency (Bolt, eyaml, the tasks, setup), so it adds nothing to install, and porting the ~330-line bash driver now is cheaper than after it absorbs more. `./igor` stays the entry point (`#!/usr/bin/env ruby`), invoked exactly as before.

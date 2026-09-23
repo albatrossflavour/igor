@@ -16,7 +16,7 @@ This matters because a blind rewrite would throw away the good decisions along w
 - Dynamic, tag-based inventory. `bolt_inventory` output plus the `tofu_inventory` task replaced hardcoded targets. Both sources used static or hardcoded hostnames. Keep.
 - Hiera-based targets instead of `peadm`'s hardcoded `puppet.lab.albatrossflavour.com`. Keep.
 - Pihole DNS, control-repo lifecycle, Terraform outputs. Genuinely new value, present in neither source. Keep.
-- The template script itself. Functionally identical to `proxform`'s, proven. Keep (with the conditional-skip improvement already added).
+- The template script itself. Functionally identical to `proxform`'s, proven. Keep (with the conditional-skip improvement already added). It has since moved to its own repo, goodmountain, because nothing about it is Puppet specific.
 
 ### Fix (Igor regressed or over-reached)
 
@@ -60,7 +60,7 @@ For each charter stage: the proven substrate it calls, whether it belongs in Bol
 
 | Stage                           | Substrate it calls                                       | Bolt or driver  | Notes                                                                                                                |
 | ------------------------------- | -------------------------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------- |
-| 1 Templates                     | `template-generate.sh` on the PVE host                   | Driver          | Run the script on the host. The Bolt SSH-staging wrapper is ceremony. Keep the skip/force_rebuild logic.             |
+| 1 Templates                     | goodmountain's `template-generate.sh` on the PVE host    | Driver          | Run the script on the host. The Bolt SSH-staging wrapper is ceremony. Keep the skip/force_rebuild logic.             |
 | 2 Provision                     | `tf/` (kept, improved with outputs and DNS)              | Driver          | Run `tofu` directly with `op://` injection restored (proxform's `run-terraform.sh` pattern). Not a Bolt plan.        |
 | 3 Control repo                  | git, gh                                                  | Driver          | `bootstrap_control_repo` is 448 lines of git/gh. A shell function, not a Bolt plan.                                  |
 | 4 PE primary                    | `peadm::install`, `code_manager`, `mkdir_p_file`         | Bolt            | Earns it. Strip out the control-repo bootstrap, CA cert, and access-login glue tangled inside it.                    |

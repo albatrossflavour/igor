@@ -13,7 +13,7 @@
 #   * Puppet/PE secrets are still eyaml-encrypted into the role yamls, exactly
 #     as before.
 #
-# The 1Password items are created in the `proxtoboltfu` vault so that
+# The 1Password items are created in the `igor` vault so that
 # `op run --env-file=secrets.env -- tofu ...` can resolve them at apply time.
 #
 # Run via `./igor setup` (which execs this script). Pass `reconfigure=true` to
@@ -29,7 +29,7 @@ require 'shellwords'
 # Constants
 # ---------------------------------------------------------------------------
 
-VAULT = 'proxtoboltfu'
+VAULT = 'igor'
 
 EYAML_KEYS = [
   '--pkcs7-private-key=keys/private_key.pkcs7.pem',
@@ -65,6 +65,27 @@ end
 def run_stdin(input, *cmd)
   out, err, status = Open3.capture3(*cmd, stdin_data: input)
   [out, err, status.success?]
+end
+
+# Run a command with stdin attached to /dev/null (a character device, not a
+# pipe), capturing stdout/stderr. The `op` CLI reads a JSON template from stdin
+# when it detects a pipe, so `op item create/edit` must NOT be handed one -
+# otherwise it fails with "invalid JSON in piped input".
+def run_null_stdin(*cmd)
+  out_r, out_w = IO.pipe
+  err_r, err_w = IO.pipe
+  pid = Process.spawn(*cmd, in: File::NULL, out: out_w, err: err_w)
+  out_w.close
+  err_w.close
+  out_t = Thread.new { out_r.read }
+  err_t = Thread.new { err_r.read }
+  Process.waitpid(pid)
+  ok = $?.success?
+  out = out_t.value
+  err = err_t.value
+  out_r.close
+  err_r.close
+  [out, err, ok]
 end
 
 # Prompt with an optional default shown in brackets. Returns the default when
@@ -142,14 +163,28 @@ end
 # 1Password helpers
 #
 # NOTE: these write to the user's 1Password account (my.1password.com), into
-# the `proxtoboltfu` vault. Field labels must match the op:// references in
+# the `igor` vault. Field labels must match the op:// references in
 # tf/providers/proxmox/secrets.env exactly, otherwise `op run` cannot resolve
 # them at tofu apply time.
 # ---------------------------------------------------------------------------
 
+def op_vault_exists?(name)
+  system('op', 'vault', 'get', name,
+         in: File::NULL, out: File::NULL, err: File::NULL)
+end
+
+# Ensure the vault exists, creating it if missing.
+def ensure_op_vault(name)
+  return if op_vault_exists?(name)
+
+  out, err, ok = run_null_stdin('op', 'vault', 'create', name)
+  die("failed to create 1Password vault #{name}: #{err}#{out}") unless ok
+  say "  created vault #{name}"
+end
+
 def op_item_exists?(title)
   system('op', 'item', 'get', title, '--vault', VAULT,
-         out: File::NULL, err: File::NULL)
+         in: File::NULL, out: File::NULL, err: File::NULL)
 end
 
 # Ensure a 1Password item exists with the given fields. Creates the item if it
@@ -161,12 +196,12 @@ end
 def ensure_op_item(title, fields)
   assignments = fields.map { |k, v| "#{k}=#{v}" }
   if op_item_exists?(title)
-    out, err, ok = run('op', 'item', 'edit', title, '--vault', VAULT, *assignments)
+    out, err, ok = run_null_stdin('op', 'item', 'edit', title, '--vault', VAULT, *assignments)
     die("failed to update 1Password item #{title}: #{err}#{out}") unless ok
     say "  updated op://#{VAULT}/#{title}"
   else
-    out, err, ok = run('op', 'item', 'create', '--category=password',
-                       "--vault=#{VAULT}", "--title=#{title}", *assignments)
+    out, err, ok = run_null_stdin('op', 'item', 'create', '--category=password',
+                                  "--vault=#{VAULT}", "--title=#{title}", *assignments)
     die("failed to create 1Password item #{title}: #{err}#{out}") unless ok
     say "  created op://#{VAULT}/#{title}"
   end
@@ -412,6 +447,7 @@ say ''
 # ---------------------------------------------------------------------------
 
 say '--- Storing secrets in 1Password ---'
+ensure_op_vault(VAULT)
 ensure_op_item('proxmox-credentials',
                'token_secret' => proxmox_token_secret,
                'cipassword' => cipassword)

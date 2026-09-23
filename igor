@@ -3,8 +3,8 @@
 # igor - conductor for building a Puppet Enterprise demo environment.
 #
 # ./igor is the driver (see DRIVER-DESIGN.md). It runs the charter's stages in
-# order and calls the tool that fits each: tofu for provisioning, the template
-# script over SSH, git/gh for the control repo, and Bolt only for the
+# order and calls the tool that fits each: tofu for provisioning, goodmountain's
+# template builder over SSH, git/gh for the control repo, and Bolt only for the
 # node-configuration stages (PE, infra roles, agents). Each stage is also
 # individually invocable for debugging and demos.
 #
@@ -103,8 +103,10 @@ role_has_targets() {
 # ---------------------------------------------------------------------------
 
 # Stage 1: build Proxmox templates on the hypervisor host.
-# Conditional: skips existing templates unless force_rebuild, so a warm host
-# pays almost nothing. Also runnable on its own via `./igor templates`.
+# The builder lives in its own repo, goodmountain, expected as a sibling
+# checkout (override with GOODMOUNTAIN_DIR). Conditional: skips existing
+# templates unless force_rebuild, so a warm host pays almost nothing. Also
+# runnable on its own via `./igor templates`.
 stage_templates() {
 	local force="${1:-false}"
 	info "Stage 1: Proxmox templates"
@@ -112,25 +114,31 @@ stage_templates() {
 	require_cmd ssh
 	require_cmd scp
 
-	local host user storage workdir cipassword
+	local host user storage workdir cipassword gm
 	host="${PVE_HOST:-$(tfvar api_url | sed -E 's#^https?://([^:/]+).*#\1#')}"
 	user="${PVE_USER:-root}"
 	storage="${STORAGE:-ceph}"
 	workdir="${PVE_WORKDIR:-/root/templates}"
+	gm="${GOODMOUNTAIN_DIR:-${SCRIPT_DIR}/../goodmountain}"
 
 	if [ -z "$host" ]; then
 		error "No Proxmox host. Set PVE_HOST, or ensure api_url is in terraform.tfvars."
 		return 1
 	fi
 
-	cipassword="$(op read "${CIPASSWORD_OP:-op://proxtoboltfu/proxmox-credentials/cipassword}")"
+	if [ ! -f "${gm}/template-generate.sh" ]; then
+		error "goodmountain not found at ${gm}. Clone it alongside igor, or set GOODMOUNTAIN_DIR."
+		return 1
+	fi
+
+	cipassword="$(op read "${CIPASSWORD_OP:-op://igor/proxmox-credentials/cipassword}")"
 
 	info "  host=${host} user=${user} storage=${storage} force_rebuild=${force}"
 	# The remote command strings intentionally expand workdir/force/storage on
 	# the client before being sent to the host (SC2029 is expected here).
 	# shellcheck disable=SC2029
 	ssh -o StrictHostKeyChecking=no "${user}@${host}" "mkdir -p '${workdir}'"
-	scp -q scripts/template-generate.sh scripts/template-clean.sh config/templates.csv \
+	scp -q "${gm}/template-generate.sh" "${gm}/template-clean.sh" "${gm}/templates.csv" \
 		"${user}@${host}:${workdir}/"
 	# Write the password file the script reads via `cat ./config`, via stdin so
 	# it never lands on the process list.

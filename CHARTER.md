@@ -51,7 +51,9 @@ Alongside the build path sit the lifecycle verbs, which exist for the operator r
 
 Template building is on the critical path, but it is conditional. The scope is "Igor can build templates". The behaviour is "Igor builds the templates that are missing". Those are not the same sentence, and the second one is what keeps `./igor deploy` usable day to day.
 
-There is one canonical builder. Any duplicate or half-finished alternative is a hazard, because a second implementation drifts from the first on VMID numbering and produces templates that stage 2 cannot find.
+There is one canonical builder, and it lives in its own repo: [goodmountain](https://github.com/albatrossflavour/goodmountain). Nothing about building templates is Puppet specific, so the builder is not Igor's code. Igor owns the stage (when it runs, on which host, with which password) and goodmountain owns how a template gets made. The driver expects goodmountain as a sibling checkout (`../goodmountain`, or `GOODMOUNTAIN_DIR`) and stages its scripts onto the host.
+
+Any duplicate or half-finished alternative is a hazard, because a second implementation drifts from the first on VMID numbering and produces templates that stage 2 cannot find.
 
 ### Gating
 

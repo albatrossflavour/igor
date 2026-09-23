@@ -61,3 +61,6 @@ keys/
 .rerun.json
 .todo.txt.bak
 .report.txt
+
+# PE suite licence, never commit
+suite-license.lic
