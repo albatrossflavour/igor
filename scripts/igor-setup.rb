@@ -271,7 +271,7 @@ say ''
 # ---------------------------------------------------------------------------
 
 say '--- Puppet Enterprise ---'
-pe_version = prompt('PE version', '2025.6.0')
+pe_version = prompt('PE version', '2025.11.3')
 github_username = prompt('GitHub username (for control repo)')
 control_repo_name = prompt('Control repo name', 'puppet-control-repo')
 
@@ -482,6 +482,7 @@ primary = <<~PRIMARY
     - pe_repo::platform::el_7_x86_64
     - pe_repo::platform::el_8_x86_64
     - pe_repo::platform::el_9_x86_64
+    - pe_repo::platform::el_10_x86_64
     - pe_repo::platform::ubuntu_2004_amd64
     - pe_repo::platform::ubuntu_2204_amd64
     - pe_repo::platform::ubuntu_2404_amd64

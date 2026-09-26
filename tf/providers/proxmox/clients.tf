@@ -45,6 +45,26 @@ locals {
       enabled      = var.enable_alma
       client_count = var.dev_clients
     }
+    "alma-10-prod" = {
+      os_family    = "alma"
+      version      = "10"
+      environment  = "prod"
+      template     = "template-Alma-10"
+      vmid_base    = "1730"
+      tag_suffix   = "alma"
+      enabled      = var.enable_alma
+      client_count = var.prod_clients
+    }
+    "alma-10-dev" = {
+      os_family    = "alma"
+      version      = "10"
+      environment  = "dev"
+      template     = "template-Alma-10"
+      vmid_base    = "1731"
+      tag_suffix   = "alma"
+      enabled      = var.enable_alma
+      client_count = var.dev_clients
+    }
 
     # Ubuntu
     "ubuntu-2004-prod" = {
@@ -149,6 +169,26 @@ locals {
       enabled      = var.enable_rocky
       client_count = var.dev_clients
     }
+    "rocky-10-prod" = {
+      os_family    = "rocky"
+      version      = "10"
+      environment  = "prod"
+      template     = "template-Rocky-10"
+      vmid_base    = "1920"
+      tag_suffix   = "rocky"
+      enabled      = var.enable_rocky
+      client_count = var.prod_clients
+    }
+    "rocky-10-dev" = {
+      os_family    = "rocky"
+      version      = "10"
+      environment  = "dev"
+      template     = "template-Rocky-10"
+      vmid_base    = "1921"
+      tag_suffix   = "rocky"
+      enabled      = var.enable_rocky
+      client_count = var.dev_clients
+    }
 
     # Oracle Linux
     "oracle-7-prod" = {
@@ -207,6 +247,26 @@ locals {
       environment  = "dev"
       template     = "template-Oracle-9"
       vmid_base    = "1131"
+      tag_suffix   = "oracle"
+      enabled      = var.enable_oracle
+      client_count = var.dev_clients
+    }
+    "oracle-10-prod" = {
+      os_family    = "oracle"
+      version      = "10"
+      environment  = "prod"
+      template     = "template-Oracle-10"
+      vmid_base    = "1840"
+      tag_suffix   = "oracle"
+      enabled      = var.enable_oracle
+      client_count = var.prod_clients
+    }
+    "oracle-10-dev" = {
+      os_family    = "oracle"
+      version      = "10"
+      environment  = "dev"
+      template     = "template-Oracle-10"
+      vmid_base    = "1841"
       tag_suffix   = "oracle"
       enabled      = var.enable_oracle
       client_count = var.dev_clients
@@ -355,6 +415,26 @@ locals {
       environment  = "dev"
       template     = "template-RedHat-9"
       vmid_base    = "1091"
+      tag_suffix   = "rhel"
+      enabled      = var.enable_redhat
+      client_count = var.dev_clients
+    }
+    "rhel-10-prod" = {
+      os_family    = "rhel"
+      version      = "10"
+      environment  = "prod"
+      template     = "template-RedHat-10"
+      vmid_base    = "1910"
+      tag_suffix   = "rhel"
+      enabled      = var.enable_redhat
+      client_count = var.prod_clients
+    }
+    "rhel-10-dev" = {
+      os_family    = "rhel"
+      version      = "10"
+      environment  = "dev"
+      template     = "template-RedHat-10"
+      vmid_base    = "1911"
       tag_suffix   = "rhel"
       enabled      = var.enable_redhat
       client_count = var.dev_clients

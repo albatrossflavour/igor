@@ -2,7 +2,7 @@ name: igor
 modules:
   # PEAdm modules
   - name: puppetlabs-peadm
-    version_requirement: 3.33.0
+    version_requirement: 3.38.3
   - name: puppetlabs-cd4peadm
     version_requirement: 5.11.0
   - name: puppetlabs-complyadm
