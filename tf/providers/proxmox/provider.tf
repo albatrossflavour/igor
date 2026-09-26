@@ -4,10 +4,6 @@ terraform {
       source  = "telmate/proxmox"
       version = "3.0.2-rc04"
     }
-    pihole = {
-      source  = "ryanwholey/pihole"
-      version = "2.0.0-beta.1"
-    }
   }
   backend "s3" {}
 }
@@ -25,9 +21,4 @@ provider "proxmox" {
     _default    = "debug"
     _capturelog = ""
   }
-}
-
-provider "pihole" {
-  url      = "http://pihole.${var.domain}"
-  password = var.pihole_password
 }

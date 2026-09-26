@@ -15,12 +15,12 @@ This matters because a blind rewrite would throw away the good decisions along w
 - Terraform and Bolt are decoupled. `proxform` ran the PE builds from Terraform `local-exec` provisioners. Igor removed them, so Terraform state completes before Bolt runs and failed config no longer taints infrastructure. This is the right architecture and it stays.
 - Dynamic, tag-based inventory. `bolt_inventory` output plus the `tofu_inventory` task replaced hardcoded targets. Both sources used static or hardcoded hostnames. Keep.
 - Hiera-based targets instead of `peadm`'s hardcoded `puppet.lab.albatrossflavour.com`. Keep.
-- Pihole DNS, control-repo lifecycle, Terraform outputs. Genuinely new value, present in neither source. Keep.
+- Control-repo lifecycle, Terraform outputs. Genuinely new value, present in neither source. Keep. (Pihole DNS was here too, and has since moved out of Igor. DNS is handled separately.)
 - The template script itself. Functionally identical to `proxform`'s, proven. Keep (with the conditional-skip improvement already added). It has since moved to its own repo, goodmountain, because nothing about it is Puppet specific.
 
 ### Fix (Igor regressed or over-reached)
 
-- Secrets. `proxform` injected credentials at apply time with `op://` references via `run-terraform.sh` and never wrote plaintext. Igor dropped that and now writes `cipassword`, `console_password`, and `pihole_password` in plaintext into `terraform.tfvars` from the setup wizard. `load_1password_secrets.rb` still exists but is unused. This is a regression and it should be undone.
+- Secrets. `proxform` injected credentials at apply time and never wrote plaintext. Igor dropped that and wrote `cipassword`, `console_password`, and the Pihole password in plaintext into `terraform.tfvars` from the setup wizard. This is a regression and it should be undone. (Done: secrets now come from environment variables only. See `DRIVER-DESIGN.md`.)
 - Everything forced through Bolt. This is the source of the pain, detailed below.
 
 ## The Bolt boundary
@@ -61,7 +61,7 @@ For each charter stage: the proven substrate it calls, whether it belongs in Bol
 | Stage                           | Substrate it calls                                       | Bolt or driver  | Notes                                                                                                                |
 | ------------------------------- | -------------------------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------- |
 | 1 Templates                     | goodmountain's `template-generate.sh` on the PVE host    | Driver          | Run the script on the host. The Bolt SSH-staging wrapper is ceremony. Keep the skip/force_rebuild logic.             |
-| 2 Provision                     | `tf/` (kept, improved with outputs and DNS)              | Driver          | Run `tofu` directly with `op://` injection restored (proxform's `run-terraform.sh` pattern). Not a Bolt plan.        |
+| 2 Provision                     | `tf/` (kept, improved with outputs)                      | Driver          | Run `tofu` directly, secrets from environment variables. Not a Bolt plan.                                            |
 | 3 Control repo                  | git, gh                                                  | Driver          | `bootstrap_control_repo` is 448 lines of git/gh. A shell function, not a Bolt plan.                                  |
 | 4 PE primary                    | `peadm::install`, `code_manager`, `mkdir_p_file`         | Bolt            | Earns it. Strip out the control-repo bootstrap, CA cert, and access-login glue tangled inside it.                    |
 | 5 Client tools                  | local puppet-access / puppet-code                        | Driver          | `fetch_ca_cert`, `puppet_access_login`, `configure_client_tools` are three localhost scripts. Merge into the driver. |
@@ -74,10 +74,10 @@ Lifecycle verbs follow the same rule: `setup` and `preflight` become driver scri
 
 ## Shape of the result
 
-The `./igor` script stays as the single entry point, but stops routing everything through `bolt plan run igor::deploy`. Instead it orchestrates the phases and calls the right tool for each: `tofu` directly for provisioning and teardown (with `op://` secrets), the template script on the host, `git`/`gh` for the control repo, local puppet client tools for stage 5, and Bolt only for the node-configuration stages (4, 6, 8) where inventory and the peadm-family modules pull their weight.
+The `./igor` script stays as the single entry point, but stops routing everything through `bolt plan run igor::deploy`. Instead it orchestrates the phases and calls the right tool for each: `tofu` directly for provisioning and teardown (secrets from the environment), the template script on the host, `git`/`gh` for the control repo, local puppet client tools for stage 5, and Bolt only for the node-configuration stages (4, 6, 8) where inventory and the peadm-family modules pull their weight.
 
 Of roughly nineteen current plans, about five stay as Bolt (cleaned up, with the three stage-6 duplicates collapsed to one). The rest become driver logic.
 
 ## Recommendation on topology
 
-Rebuild in place, do not start a fresh repo. The map shows why: Igor's keepers (TF decoupling, dynamic inventory, hiera targets, DNS, tofu outputs, the control-repo template, the eyaml keys, the charter) are exactly the parts a fresh repo would have to re-derive from scratch. The mess is concentrated in `plans/` and the secrets handling, both of which can be rewritten on a branch without disturbing the substrate. A fresh repo pays full price to recover work Igor already got right.
+Rebuild in place, do not start a fresh repo. The map shows why: Igor's keepers (TF decoupling, dynamic inventory, hiera targets, tofu outputs, the control-repo template, the eyaml keys, the charter) are exactly the parts a fresh repo would have to re-derive from scratch. The mess is concentrated in `plans/` and the secrets handling, both of which can be rewritten on a branch without disturbing the substrate. A fresh repo pays full price to recover work Igor already got right.

@@ -5,21 +5,17 @@
 #
 # This is the Ruby replacement for the old `plans/setup.pp` Bolt plan. It walks
 # through the same phases (eyaml keys, prompts, eyaml encryption, config file
-# writing, tofu init) but folds in the op:// secrets model:
+# writing, tofu init). Secrets are never prompted for or written to disk:
 #
-#   * TF secrets (proxmox token secret, cipassword, console password, pihole
-#     password) live in 1Password, not in terraform.tfvars.
-#   * S3 backend credentials live in 1Password, not in s3.tfbackend.
-#   * Puppet/PE secrets are still eyaml-encrypted into the role yamls, exactly
-#     as before.
-#
-# The 1Password items are created in the `igor` vault so that
-# `op run --env-file=secrets.env -- tofu ...` can resolve them at apply time.
+#   * TF and S3 backend secrets come from environment variables (SECRET_VARS
+#     below). Where they come from is the operator's business. setup only
+#     checks they are set, and tofu reads them directly.
+#   * Puppet/PE secrets are eyaml-encrypted into the role yamls, exactly as
+#     before. The console password is read from TF_VAR_console_password.
 #
 # Run via `./igor setup` (which execs this script). Pass `reconfigure=true` to
 # force reconfiguration even when config already exists.
 
-require 'io/console'
 require 'open3'
 require 'tempfile'
 require 'fileutils'
@@ -29,7 +25,15 @@ require 'shellwords'
 # Constants
 # ---------------------------------------------------------------------------
 
-VAULT = 'igor'
+# Secrets igor needs from the environment. TF_VAR_* are read by tofu, AWS_*
+# by the S3 state backend.
+SECRET_VARS = %w[
+  TF_VAR_proxmox_token_secret
+  TF_VAR_cipassword
+  TF_VAR_console_password
+  AWS_ACCESS_KEY_ID
+  AWS_SECRET_ACCESS_KEY
+].freeze
 
 EYAML_KEYS = [
   '--pkcs7-private-key=keys/private_key.pkcs7.pem',
@@ -67,27 +71,6 @@ def run_stdin(input, *cmd)
   [out, err, status.success?]
 end
 
-# Run a command with stdin attached to /dev/null (a character device, not a
-# pipe), capturing stdout/stderr. The `op` CLI reads a JSON template from stdin
-# when it detects a pipe, so `op item create/edit` must NOT be handed one -
-# otherwise it fails with "invalid JSON in piped input".
-def run_null_stdin(*cmd)
-  out_r, out_w = IO.pipe
-  err_r, err_w = IO.pipe
-  pid = Process.spawn(*cmd, in: File::NULL, out: out_w, err: err_w)
-  out_w.close
-  err_w.close
-  out_t = Thread.new { out_r.read }
-  err_t = Thread.new { err_r.read }
-  Process.waitpid(pid)
-  ok = $?.success?
-  out = out_t.value
-  err = err_t.value
-  out_r.close
-  err_r.close
-  [out, err, ok]
-end
-
 # Prompt with an optional default shown in brackets. Returns the default when
 # the user just presses Enter. A default of '' still shows `[]` and allows an
 # empty answer (used for the optional PE licence / forge token).
@@ -104,14 +87,6 @@ def prompt(message, default = nil)
   else
     input
   end
-end
-
-# Prompt for a secret without echoing keystrokes.
-def prompt_secret(message)
-  print "#{message}: "
-  value = $stdin.noecho(&:gets)
-  puts ''
-  value.nil? ? '' : value.chomp
 end
 
 def file_exists?(path)
@@ -160,54 +135,6 @@ def eyaml_encrypt_generated(pipeline)
 end
 
 # ---------------------------------------------------------------------------
-# 1Password helpers
-#
-# NOTE: these write to the user's 1Password account (my.1password.com), into
-# the `igor` vault. Field labels must match the op:// references in
-# tf/providers/proxmox/secrets.env exactly, otherwise `op run` cannot resolve
-# them at tofu apply time.
-# ---------------------------------------------------------------------------
-
-def op_vault_exists?(name)
-  system('op', 'vault', 'get', name,
-         in: File::NULL, out: File::NULL, err: File::NULL)
-end
-
-# Ensure the vault exists, creating it if missing.
-def ensure_op_vault(name)
-  return if op_vault_exists?(name)
-
-  out, err, ok = run_null_stdin('op', 'vault', 'create', name)
-  die("failed to create 1Password vault #{name}: #{err}#{out}") unless ok
-  say "  created vault #{name}"
-end
-
-def op_item_exists?(title)
-  system('op', 'item', 'get', title, '--vault', VAULT,
-         in: File::NULL, out: File::NULL, err: File::NULL)
-end
-
-# Ensure a 1Password item exists with the given fields. Creates the item if it
-# is missing, or edits it to set the fields if it already exists.
-#
-# Field assignments are passed as separate argv tokens (no shell), so values
-# containing shell metacharacters are safe. They are briefly visible in the
-# process list while `op` runs - acceptable for a one-off interactive setup.
-def ensure_op_item(title, fields)
-  assignments = fields.map { |k, v| "#{k}=#{v}" }
-  if op_item_exists?(title)
-    out, err, ok = run_null_stdin('op', 'item', 'edit', title, '--vault', VAULT, *assignments)
-    die("failed to update 1Password item #{title}: #{err}#{out}") unless ok
-    say "  updated op://#{VAULT}/#{title}"
-  else
-    out, err, ok = run_null_stdin('op', 'item', 'create', '--category=password',
-                                  "--vault=#{VAULT}", "--title=#{title}", *assignments)
-    die("failed to create 1Password item #{title}: #{err}#{out}") unless ok
-    say "  created op://#{VAULT}/#{title}"
-  end
-end
-
-# ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 
@@ -229,7 +156,6 @@ project_root = Dir.pwd
 provider_dir = "tf/providers/#{provider}"
 tfvars_path  = "#{provider_dir}/terraform.tfvars"
 backend_path = "#{provider_dir}/s3.tfbackend"
-secrets_env  = "#{provider_dir}/secrets.env"
 
 # ---------------------------------------------------------------------------
 # Intro
@@ -237,6 +163,11 @@ secrets_env  = "#{provider_dir}/secrets.env"
 
 say '=== Igor Setup Wizard ==='
 say ''
+
+missing = SECRET_VARS.reject { |v| ENV.fetch(v, '') != '' }
+unless missing.empty?
+  die("these environment variables must be set before setup runs:\n  #{missing.join("\n  ")}")
+end
 say 'This will configure Igor for first-time use.'
 say 'Press Enter to accept [default] values shown in brackets.'
 say ''
@@ -301,7 +232,6 @@ say ''
 say '--- Proxmox Connection ---'
 api_url = prompt('Proxmox API URL (e.g., https://192.168.5.10:8006/api2/json)')
 proxmox_token_id = prompt('Proxmox API token ID (e.g., terraform@pve!terraform)')
-proxmox_token_secret = prompt_secret('Proxmox API token secret')
 say ''
 
 # ---------------------------------------------------------------------------
@@ -312,8 +242,6 @@ say '--- S3/MinIO State Backend ---'
 s3_endpoint = prompt('S3/MinIO endpoint URL (e.g., http://s3.example.com)')
 s3_bucket = prompt('S3 bucket name', 'terraform')
 s3_state_key = prompt('State file key', 'igor.tfstate')
-s3_access_key = prompt('S3 access key')
-s3_secret_key = prompt_secret('S3 secret key')
 say ''
 
 # ---------------------------------------------------------------------------
@@ -322,9 +250,7 @@ say ''
 
 say '--- Credentials ---'
 ciuser = prompt('Cloud-init / SSH username')
-cipassword = prompt_secret('Cloud-init password')
-console_password = prompt_secret('PE console admin password')
-pihole_password = prompt_secret('Pihole admin password')
+console_password = ENV.fetch('TF_VAR_console_password')
 say ''
 
 # ---------------------------------------------------------------------------
@@ -437,26 +363,6 @@ end
 cd4pe['secret_key'] = eyaml_encrypt_generated(GEN_SECRET32)
 
 say '  All sensitive values encrypted'
-say ''
-
-# ---------------------------------------------------------------------------
-# Phase 11b: 1Password items (TF + S3 secrets)
-#
-# These must exist before `tofu init` runs, since the S3 backend reads AWS
-# credentials from 1Password via `op run`.
-# ---------------------------------------------------------------------------
-
-say '--- Storing secrets in 1Password ---'
-ensure_op_vault(VAULT)
-ensure_op_item('proxmox-credentials',
-               'token_secret' => proxmox_token_secret,
-               'cipassword' => cipassword)
-# console_password is used by BOTH terraform (here) and Puppet (eyaml, below).
-ensure_op_item('pe-credentials', 'console_password' => console_password)
-ensure_op_item('pihole-credentials', 'password' => pihole_password)
-ensure_op_item('aws-s3-backend',
-               'access_key_id' => s3_access_key,
-               'secret_access_key' => s3_secret_key)
 say ''
 
 # ---------------------------------------------------------------------------
@@ -757,18 +663,17 @@ end
 say ''
 
 # ---------------------------------------------------------------------------
-# Phase 17: Initialize tofu (S3 creds injected from 1Password via op run)
+# Phase 17: Initialize tofu (S3 creds from AWS_* in the environment)
 # ---------------------------------------------------------------------------
 
 say '--- Initializing OpenTofu ---'
 tofu_cmd = "cd #{Shellwords.escape(provider_dir)} && tofu init -backend-config=./s3.tfbackend"
-ok = system('op', 'run', "--env-file=#{secrets_env}", '--',
-            'sh', '-c', tofu_cmd)
+ok = system('sh', '-c', tofu_cmd)
 if ok
   say '  OpenTofu initialized'
 else
-  say '  WARNING: tofu init failed. Check the aws-s3-backend 1Password item and s3.tfbackend.'
-  say "  Run manually: op run --env-file=#{secrets_env} -- sh -c '#{tofu_cmd}'"
+  say '  WARNING: tofu init failed. Check AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and s3.tfbackend.'
+  say "  Run manually: #{tofu_cmd}"
 end
 
 say ''

@@ -14,7 +14,7 @@
       "type": "Optional[Array[String]]"
     },
     "secrets": {
-      "description": "Environment variables to set from 1Password",
+      "description": "Environment variables to set for the tofu process",
       "type": "Optional[Hash]"
     }
   },

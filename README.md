@@ -19,7 +19,6 @@ This project provides a complete infrastructure-as-code solution for deploying:
 - **Dashboard** server for visualization
 - **Puppet agent clients** across multiple OS distributions
 - **Dynamic inventory** from Terraform state
-- **Automatic DNS** registration via Pihole
 
 The architecture separates infrastructure provisioning (OpenTofu)
 from configuration management (Bolt) for clean, repeatable
@@ -49,7 +48,7 @@ gem install hiera-eyaml
 ### Required Infrastructure
 
 - **Proxmox VE** cluster with API access
-- **Pihole** DNS server with API access
+- DNS for the VM hostnames, managed outside Igor
 - **SSH access** to Proxmox hosts
 - **Proxmox VM templates** with cloud-init enabled
 
@@ -69,7 +68,6 @@ for VMs.
 ### Required Access
 
 - Proxmox API token with appropriate permissions
-- Pihole admin password
 - Puppet Enterprise license key (for production deployments)
 
 ## Initial Setup
@@ -133,9 +131,8 @@ ciuser = "yourusername"
 cipassword = "your-cloud-init-password"
 sshkey = "ssh-ed25519 AAAAC3... your-public-key"
 
-# Pihole Configuration
-pihole_password = "your-pihole-admin-password"
-domain          = "yourdomain.com"
+# Domain
+domain = "yourdomain.com"
 
 # PE Console
 console_password = "your-pe-console-password"
@@ -272,12 +269,11 @@ If you prefer manual control:
 cd tf/providers/proxmox
 tofu init
 tofu plan   # Review what will be created
-tofu apply -parallelism=1
+tofu apply
 cd ../../..
 ```
 
-This creates VMs and DNS records for enabled infrastructure.
-Serial execution (`-parallelism=1`) prevents Pihole API exhaustion.
+This creates VMs for enabled infrastructure.
 
 **Expected time:** 2-3 minutes
 
@@ -318,7 +314,7 @@ bolt plan run igor::build_agents
 **Deploy Clients:**
 
 1. Configure client counts in `tf/providers/proxmox/terraform.tfvars`
-2. Apply infrastructure: `cd tf/providers/proxmox && tofu apply -parallelism=1 && cd ../../..`
+2. Apply infrastructure: `cd tf/providers/proxmox && tofu apply && cd ../../..`
 3. Configure agents: `bolt plan run igor::build_agents`
 
 **Destroy Clients:**
@@ -377,7 +373,6 @@ open https://new-puppet.yourdomain.com
 | `ciuser`               | Yes      | -                      | Cloud-init user          |
 | `cipassword`           | Yes      | -                      | Cloud-init password      |
 | `sshkey`               | Yes      | -                      | SSH public key           |
-| `pihole_password`      | Yes      | -                      | Pihole admin password    |
 | `domain`               | No       | `albatrossflavour.com` | Base domain              |
 | `console_password`     | Yes      | -                      | PE console password      |
 | `storage_location`     | No       | `ceph`                 | Proxmox storage pool     |
@@ -463,7 +458,7 @@ configuration:
 2. **Apply Terraform:**
 
    ```bash
-   cd tf/providers/proxmox && tofu apply -parallelism=1
+   cd tf/providers/proxmox && tofu apply
    ```
 
 3. **Deploy agents:**
@@ -512,7 +507,7 @@ Modify Terraform files, then:
 ```bash
 cd tf/providers/proxmox
 tofu plan   # Review changes
-tofu apply -parallelism=1
+tofu apply
 ```
 
 Re-run Bolt plans if configuration changed:
@@ -540,8 +535,6 @@ PT_provider=proxmox PT_tag_filter=puppet \
 # Test DNS resolution
 dig new-puppet.yourdomain.com
 
-# Check Pihole
-curl -X GET "http://pihole.yourdomain.com/api/dns"
 ```
 
 **Plans fail with connection errors:**
@@ -584,7 +577,7 @@ sudo sed -i 's/wrong.domain.com/albatrossflavour.com/g' \
 sudo netplan apply
 
 # Or recreate the VM with updated Terraform config
-tofu -chdir=tf/providers/proxmox apply -parallelism=1 \
+tofu -chdir=tf/providers/proxmox apply \
   -replace=proxmox_vm_qemu.server-name[0]
 ```
 
@@ -633,7 +626,6 @@ chmod 600 tf/providers/proxmox/terraform.tfvars
 ### Access Control
 
 - Proxmox: Use dedicated service account with minimal permissions
-- Pihole: Use strong admin password, consider HTTPS
 - Puppet: Follow PE security best practices
 - SSH: Disable password authentication, use ed25519 keys
 

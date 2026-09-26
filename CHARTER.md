@@ -6,7 +6,7 @@ This document records what Igor is for, where its scope starts and stops, and th
 
 Take a barebones Proxmox host and stitch together a fully functioning Puppet Enterprise environment, including the control repo, from a single command. One operator, one `./igor deploy`, empty hypervisor to working PE with agents reporting in.
 
-The operative word is stitch. Igor is not a configuration management tool and it is not a cloud abstraction. It is the integration layer that wires together tools which do not natively know about each other: OpenTofu, Proxmox, Pihole, peadm, complyadm, cd4peadm, and GitHub. Each of those does one job. Igor owns the ordering, the handoffs, and the shared truth (Hiera plus `r10k_remote`) that makes them behave as one system.
+The operative word is stitch. Igor is not a configuration management tool and it is not a cloud abstraction. It is the integration layer that wires together tools which do not natively know about each other: OpenTofu, Proxmox, peadm, complyadm, cd4peadm, and GitHub. Each of those does one job. Igor owns the ordering, the handoffs, and the shared truth (Hiera plus `r10k_remote`) that makes them behave as one system.
 
 ## Start state
 
@@ -24,7 +24,7 @@ Igor does not install Proxmox, Ceph, or the network bridges. It assumes that bas
 A run leaves behind:
 
 - Proxmox VM templates for the enabled operating systems
-- VMs provisioned with static IPs and DNS records
+- VMs provisioned with static IPs
 - a Puppet Enterprise primary installed and configured via peadm
 - working local client tools (CA cert imported, console login enabled)
 - a control repo created on GitHub, seeded from Igor's data, both branches pushed and code deployed
@@ -36,7 +36,7 @@ A run leaves behind:
 This is the spine. Every artefact in the repo should map to one of these stages or be removed.
 
 1. Build Proxmox templates (host-side, on the PVE host, conditional). Produces named templates.
-2. Provision VMs and DNS (OpenTofu plus Proxmox plus Pihole). Clones the templates from stage 1.
+2. Provision VMs (OpenTofu plus Proxmox). Clones the templates from stage 1.
 3. Bootstrap the control repo on GitHub, seeded from Igor's data. Done before the PE build so Code Manager has code to deploy from.
 4. Build the PE primary (peadm). Code Manager deploys from the control repo created in stage 3.
 5. Configure local client tools (CA cert, console login).
@@ -91,4 +91,5 @@ Stating the exclusions is half the value of a charter.
 - Agent-side configuration. That is the control repo's job, at runtime, via Code Manager. Igor creates and seeds the control repo, then gets out of the way.
 - Day-2 drift management. Igor builds the environment. Keeping it correct afterwards is Puppet's job.
 - Multi-cloud. Proxmox is the implementation. The provider contract under `tf/providers/_contract/` is a marker for a possible second provider, not a promise to be provider-agnostic today.
+- DNS. Name resolution for the VMs is handled outside Igor. Igor assumes the hostnames in Hiera resolve by the time the Bolt stages run.
 - Hypervisor provisioning. Igor assumes Proxmox, Ceph, and networking already exist. It builds templates on the host but does not install or configure the host.

@@ -27,38 +27,20 @@ Per-stage invocation matters for a demo and for debugging: you can rerun just th
 
 ## Secrets model
 
-This is the regression fix. Today `setup` writes `cipassword`, `console_password`, and `pihole_password` in plaintext into `terraform.tfvars`. Restore the `op://` pattern that `load_1password_secrets.rb` already encodes. The clean split is three-way:
+Setup used to write `cipassword`, `console_password` and the Pihole password in plaintext into `terraform.tfvars`. It no longer writes or prompts for them anywhere. Igor reads secrets from environment variables and has no opinion on how they get there, whether that's a shell profile, a CI secret store, or typing `export` by hand.
 
-- **Terraform secrets** live in 1Password, injected at apply time. `terraform.tfvars` holds non-secret config only (domain, api_url, storage, enable flags, counts). Secrets never touch disk.
-- **The template password** (`cipassword`) is read from 1Password at stage 1, not scraped from tfvars.
-- **Puppet and PE secrets** stay in Hiera, eyaml-encrypted with `keys/`. This side was always correct and does not change.
+- **Terraform and state backend secrets** are ordinary environment variables that tofu reads itself: `TF_VAR_proxmox_token_secret`, `TF_VAR_cipassword`, `TF_VAR_console_password`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. `terraform.tfvars` holds non-secret config only.
+- **The template password** for stage 1 is the same `TF_VAR_cipassword`, handed to goodmountain over SSH stdin.
+- **Puppet and PE secrets** stay in Hiera, eyaml-encrypted with `keys/`. Setup encrypts the console password from `TF_VAR_console_password`.
 
-The driver injects Terraform secrets with an `op run` env-file, so the values only exist in the subprocess environment:
-
-```bash
-# tf/providers/proxmox/secrets.env  (op:// references, safe to commit)
-TF_VAR_proxmox_password=op://igor/proxmox-credentials/password
-TF_VAR_pe_console_password=op://igor/pe-credentials/console_password
-TF_VAR_sudo_password=op://igor/pe-credentials/sudo_password
-TF_VAR_forge_token=op://igor/pe-credentials/forge_token
-AWS_ACCESS_KEY_ID=op://igor/aws-s3-backend/access_key_id
-AWS_SECRET_ACCESS_KEY=op://igor/aws-s3-backend/secret_access_key
-
-# driver wrapper
-tofu_apply() {
-  op run --env-file=tf/providers/proxmox/secrets.env -- \
-    sh -c 'cd tf/providers/proxmox && tofu apply -auto-approve -parallelism=1'
-}
-```
-
-The env-file holds `op://` references, not secrets, so it can be committed. This is exactly what `load_1password_secrets.rb` does, moved to where it belongs and actually used.
+The list lives in `SECRET_VARS` in both `./igor` and `scripts/igor-setup.rb`. Both check it up front and name every missing variable, so a run fails before it starts, not halfway through an apply.
 
 ## Per-stage map (concrete)
 
 | Stage                | Driver does                                                                                     | Tool            |
 | -------------------- | ----------------------------------------------------------------------------------------------- | --------------- |
-| 1 Templates          | `op read` the cipassword, scp goodmountain to the PVE host, run `template-generate.sh` over SSH | Driver (ssh)    |
-| 2 Provision          | `op run -- tofu apply` with the env-file; wait for DNS                                          | Driver (tofu)   |
+| 1 Templates          | scp goodmountain to the PVE host, pass `TF_VAR_cipassword` on stdin, run `template-generate.sh` | Driver (ssh)    |
+| 2 Provision          | `tofu apply` with secrets from the environment                                                  | Driver (tofu)   |
 | 3 Control repo       | `gh repo create`, clone template, seed from `data/`, push                                       | Driver (git/gh) |
 | 4 PE primary         | `bolt plan run igor::build_pe`                                                                  | Bolt            |
 | 5 Client tools       | fetch CA cert, `puppet access login`, write client configs                                      | Driver          |
@@ -86,11 +68,11 @@ Being honest about what the driver replaces, so we do not end up with two implem
 
 - `plans/build_templates.pp` (the Bolt SSH-staging plan we built this session) is superseded by the stage 1 driver function. The awkward parts (constructing a Target, uploading files, awk-scraping the password from tfvars) disappear. What carries over untouched: the skip and `force_rebuild` logic already in `template-generate.sh`, and the `igor::proxmox_host` config (`host`/`user`/`storage`/`work_dir`), now read by the driver instead of the plan. Remove `build_templates.pp` when the driver stage lands.
 - `plans/deploy.pp` orchestration moves into the driver's `deploy` command. The plan goes away.
-- `plans/setup.pp` (817 lines) breaks into driver phases: collect config, write `terraform.tfvars` (non-secrets), ensure the 1Password items and eyaml keys exist, write `inventory.yaml`, `tofu init`. Not a Bolt plan.
+- `plans/setup.pp` (817 lines) breaks into driver phases: collect config, write `terraform.tfvars` (non-secrets), check the secret environment variables are set, ensure the eyaml keys exist, write `inventory.yaml`, `tofu init`. Not a Bolt plan.
 - The ceremony plans (`bootstrap_control_repo`, `destroy_control_repo`, `configure_client_tools`, `fetch_ca_cert`, `puppet_access_login`) become driver functions.
 
 ## Decisions (settled)
 
 1. **Config source: keep the split.** The driver reads `terraform.tfvars` and tofu outputs; the Bolt stages read Hiera as they do now. This accepts the existing duplication of domain and hostnames across the two, in exchange for less work and less risk. Unifying config is a possible later cleanup, not part of this rewrite.
-2. **1Password provisioning: create if missing.** `setup` prompts for each Terraform secret and provisions them in the `igor` vault: it runs `op vault create igor` if the vault is missing, then `op item create`/`op item edit` for each item. Fields are passed as assignment arguments with stdin on `/dev/null` (the `op` CLI otherwise tries to read a JSON template from a piped stdin and fails). This makes a fresh demo turnkey.
+2. **Secrets: environment variables only.** Igor does not integrate with any secret manager. It reads the `SECRET_VARS` list from the environment and fails early if any are missing. How the variables get populated is up to the operator, not Igor.
 3. **Driver language: Ruby.** Initially bash (it matched the existing `./igor` entry point and is fine for sequencing subprocess calls), revised to Ruby. Setup went to Ruby first because it is interactive prompts plus crypto plus templating — bash's weak spot. The driver follows because the work still queued to move into it (stages 3 and 4: reading `console_password` from eyaml hiera, and the 448-line git/gh control-repo bootstrap) is the same Ruby-shaped logic, and even today role discovery shells out to `jq` and config reading to `awk`. Ruby is already a hard dependency (Bolt, eyaml, the tasks, setup), so it adds nothing to install, and porting the ~330-line bash driver now is cheaper than after it absorbs more. `./igor` stays the entry point (`#!/usr/bin/env ruby`), invoked exactly as before.

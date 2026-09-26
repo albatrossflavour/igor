@@ -153,12 +153,6 @@ variable "console_password" {
   sensitive   = true
 }
 
-variable "pihole_password" {
-  description = "Pihole admin password"
-  type        = string
-  sensitive   = true
-}
-
 variable "domain" {
   description = "Base domain for infrastructure"
   type        = string

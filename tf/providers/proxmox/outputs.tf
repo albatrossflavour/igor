@@ -47,6 +47,5 @@ output "client_resource_addresses" {
   description = "Terraform resource addresses for client resources (used by destroy plans)"
   value = {
     compute = [for key, _ in proxmox_vm_qemu.puppet_clients : "proxmox_vm_qemu.puppet_clients[\"${key}\"]"]
-    dns     = [for key, _ in pihole_dns_record.puppet_clients : "pihole_dns_record.puppet_clients[\"${key}\"]"]
   }
 }

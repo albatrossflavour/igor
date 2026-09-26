@@ -56,7 +56,7 @@ plan igor::destroy_agents (
 
   # Build -target flags from the output
   $target_flags_result = run_command(
-    "echo '${addresses_json}' | jq -r '(.compute + .dns)[] | \"-target=\" + .' | tr '\\n' ' '",
+    "echo '${addresses_json}' | jq -r '.compute[] | \"-target=\" + .' | tr '\\n' ' '",
     'localhost',
     '_run_as' => system::env('USER'),
     '_catch_errors' => true

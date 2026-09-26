@@ -43,13 +43,11 @@ Object containing Terraform resource addresses for client (agent) resources. Use
 | Field     | Type         | Description                              |
 | --------- | ------------ | ---------------------------------------- |
 | `compute` | list(string) | Resource addresses for compute instances |
-| `dns`     | list(string) | Resource addresses for DNS records       |
 
 Example:
 
 ```json
 {
-  "compute": ["proxmox_vm_qemu.puppet_clients[\"ubuntu-2404-prod-1\"]"],
-  "dns": ["pihole_dns_record.puppet_clients[\"ubuntu-2404-prod-1\"]"]
+  "compute": ["proxmox_vm_qemu.puppet_clients[\"ubuntu-2404-prod-1\"]"]
 }
 ```

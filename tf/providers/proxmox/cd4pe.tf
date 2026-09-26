@@ -75,9 +75,3 @@ resource "proxmox_vm_qemu" "new-cd4pe-server" {
     ]
   }
 }
-
-resource "pihole_dns_record" "new-cd4pe" {
-  count  = var.puppet_cd4pe ? 1 : 0
-  domain = "new-cd4pe.${var.domain}"
-  ip     = regexall("ip=([^/]+)", proxmox_vm_qemu.new-cd4pe-server[0].ipconfig0)[0][0]
-}

@@ -1,5 +1,5 @@
 #!/opt/puppetlabs/puppet/bin/ruby
-# Execute Terraform operations with 1Password secret injection
+# Execute Terraform operations with secrets passed in as environment variables
 
 require 'json'
 require 'open3'

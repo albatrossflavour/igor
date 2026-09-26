@@ -521,12 +521,6 @@ resource "proxmox_vm_qemu" "puppet_clients" {
 }
 
 # DNS records for puppet clients
-resource "pihole_dns_record" "puppet_clients" {
-  for_each = local.puppet_clients_map
-
-  domain = "${each.value.config.os_family}-${each.value.config.version}-puppet-${each.value.config.environment}-${each.value.instance_num}.${var.domain}"
-  ip     = each.value.ip_address
-}
 
 # Optional: Output showing what would be created
 output "puppet_clients_to_create" {

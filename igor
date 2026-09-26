@@ -31,7 +31,6 @@ cd "$SCRIPT_DIR"
 
 PROVIDER="${IGOR_PROVIDER:-proxmox}"
 PROVIDER_DIR="tf/providers/${PROVIDER}"
-SECRETS_ENV="${PROVIDER_DIR}/secrets.env"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -76,18 +75,41 @@ ensure_modules() {
 	fi
 }
 
-# Read a value from terraform.tfvars (non-secret config; secrets come from 1Password).
+# Secrets come from the environment and nowhere else. TF_VAR_* are read by
+# tofu, AWS_* by the S3 state backend.
+SECRET_VARS=(
+	TF_VAR_proxmox_token_secret
+	TF_VAR_cipassword
+	TF_VAR_console_password
+	AWS_ACCESS_KEY_ID
+	AWS_SECRET_ACCESS_KEY
+)
+
+# Fail early, naming every missing variable, rather than letting tofu prompt
+# for them or fail halfway through an apply.
+require_vars() {
+	local v missing=()
+	for v in "$@"; do
+		[ -n "${!v:-}" ] || missing+=("$v")
+	done
+	if [ "${#missing[@]}" -gt 0 ]; then
+		error "These environment variables must be set:"
+		printf '          %s\n' "${missing[@]}" >&2
+		return 1
+	fi
+}
+
+# Read a value from terraform.tfvars (non-secret config only).
 tfvar() {
 	awk -F'"' -v k="$1" '$0 ~ "^[[:space:]]*"k"[[:space:]]*=" {print $2; exit}' \
 		"${PROVIDER_DIR}/terraform.tfvars" 2>/dev/null
 }
 
-# Run tofu in the provider dir with secrets injected from 1Password.
+# Run tofu in the provider dir. Secrets reach it through the environment.
 tofu_run() {
-	require_cmd op
 	require_cmd tofu
-	op run --env-file="$SECRETS_ENV" -- \
-		sh -c "cd '${PROVIDER_DIR}' && tofu $*"
+	require_vars "${SECRET_VARS[@]}"
+	(cd "$PROVIDER_DIR" && tofu "$@")
 }
 
 # True if the given tofu tag has at least one VM in state.
@@ -110,11 +132,11 @@ role_has_targets() {
 stage_templates() {
 	local force="${1:-false}"
 	info "Stage 1: Proxmox templates"
-	require_cmd op
+	require_vars TF_VAR_cipassword
 	require_cmd ssh
 	require_cmd scp
 
-	local host user storage workdir cipassword gm
+	local host user storage workdir gm
 	host="${PVE_HOST:-$(tfvar api_url | sed -E 's#^https?://([^:/]+).*#\1#')}"
 	user="${PVE_USER:-root}"
 	storage="${STORAGE:-ceph}"
@@ -131,8 +153,6 @@ stage_templates() {
 		return 1
 	fi
 
-	cipassword="$(op read "${CIPASSWORD_OP:-op://igor/proxmox-credentials/cipassword}")"
-
 	info "  host=${host} user=${user} storage=${storage} force_rebuild=${force}"
 	# The remote command strings intentionally expand workdir/force/storage on
 	# the client before being sent to the host (SC2029 is expected here).
@@ -142,8 +162,9 @@ stage_templates() {
 		"${user}@${host}:${workdir}/"
 	# Write the password file the script reads via `cat ./config`, via stdin so
 	# it never lands on the process list.
-	# shellcheck disable=SC2029
-	printf '%s' "$cipassword" | ssh "${user}@${host}" "umask 077 && cat > '${workdir}/config'"
+	# TF_VAR_cipassword comes from the environment (checked by require_vars).
+	# shellcheck disable=SC2029,SC2154
+	printf '%s' "$TF_VAR_cipassword" | ssh "${user}@${host}" "umask 077 && cat > '${workdir}/config'"
 	# shellcheck disable=SC2029
 	ssh "${user}@${host}" "cd '${workdir}' && FORCE_REBUILD='${force}' STORAGE='${storage}' sh ./template-generate.sh"
 	# shellcheck disable=SC2029
@@ -151,12 +172,10 @@ stage_templates() {
 	info "  templates ready"
 }
 
-# Stage 2: provision VMs and DNS with tofu (secrets from 1Password).
+# Stage 2: provision VMs and DNS with tofu.
 stage_provision() {
 	info "Stage 2: Provision infrastructure (tofu apply)"
-	tofu_run "apply -auto-approve -parallelism=1"
-	info "  waiting 30s for DNS propagation..."
-	sleep 30
+	tofu_run apply -auto-approve
 	info "  infrastructure provisioned"
 }
 
@@ -184,7 +203,7 @@ stage_pe() {
 # Stage 5: local Puppet client tools (CA cert, console login, tool config).
 # Runs after stage_pe (needs PE up). Still invokes the Bolt plans, which read
 # config and the console password from eyaml hiera; a bash reimplementation
-# follows the secrets migration that moves those into 1Password.
+# follows.
 stage_client_tools() {
 	info "Stage 5: Client tools"
 	check_bolt

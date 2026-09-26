@@ -73,9 +73,3 @@ resource "proxmox_vm_qemu" "dashboard-server" {
     ]
   }
 }
-
-resource "pihole_dns_record" "new-dashboard" {
-  count  = var.puppet_dashboard ? 1 : 0
-  domain = "new-dashboard.${var.domain}"
-  ip     = regexall("ip=([^/]+)", proxmox_vm_qemu.dashboard-server[0].ipconfig0)[0][0]
-}

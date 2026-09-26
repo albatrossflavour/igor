@@ -73,9 +73,3 @@ resource "proxmox_vm_qemu" "new-puppet-server" {
     ]
   }
 }
-
-resource "pihole_dns_record" "new-puppet" {
-  count  = var.puppet_pe ? 1 : 0
-  domain = "new-puppet.${var.domain}"
-  ip     = regexall("ip=([^/]+)", proxmox_vm_qemu.new-puppet-server[0].ipconfig0)[0][0]
-}
